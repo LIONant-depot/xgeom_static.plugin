@@ -416,3 +416,5 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+/build/xgeom_static_compiler.vs2022
+/dependencies
