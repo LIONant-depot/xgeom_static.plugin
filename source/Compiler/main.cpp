@@ -14,7 +14,7 @@ int main( int argc, const char* argv[] )
     //
    // Create the compiler instance
    //
-    auto GeomCompilerPipeline = xgeom_compiler::instance::Create();
+    auto GeomCompilerPipeline = xgeom_static_compiler::instance::Create();
 
     //
     // This is just for debugging

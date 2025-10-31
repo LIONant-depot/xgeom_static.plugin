@@ -32,8 +32,12 @@ DefineInterfaceComponent(meshoptimizer "dependencies"
 )
 
 DefineInterfaceComponent(xgeom_static_compiler_ "dependencies"
-  "source/xgeom_static_rsc_descriptor.h"
+  "source/xgeom_static_details.h"
+  "source/xgeom_static_descriptor.h"
   "source/xgeom_static.h"
   "source/Compiler/xgeom_static_compiler.cpp"
   "source/Compiler/xgeom_static_compiler.h"
+  "**XGPU"
+  "source/xgeom_static_xgpu_rsc_loader.h"
+  "source/xgeom_static_xgpu_runtime.h"
 )

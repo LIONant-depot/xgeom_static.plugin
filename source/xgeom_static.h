@@ -86,7 +86,7 @@ namespace xgeom_static
             vec4 m_ScaleAndOffset; // (xy scale, zw offsets)
         };
 
-        using runtime_allocation = std::array<std::size_t, 4>;
+        using runtime_allocation = std::array<std::size_t, 5*3>;
 
         //-------------------------------------------------------------------------
 

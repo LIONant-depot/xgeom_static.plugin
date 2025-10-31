@@ -9,15 +9,15 @@
 #include "dependencies/xbitmap/source/xcolor.h"
 #include "dependencies/xbits/source/xbits.h"
 
-#include "../xgeom_static_rsc_descriptor.h"
+#include "../xgeom_static_descriptor.h"
 #include "../xgeom_static.h"
 #include "../xgeom_static_details.h"
 
 #include "dependencies/xproperty/source/xcore/my_properties.cpp"
 
-namespace xgeom_compiler
+namespace xgeom_static_compiler
 {
-    struct implementation : xgeom_compiler::instance
+    struct implementation : xgeom_static_compiler::instance
     {
         using geom = xgeom_static::geom;
 
