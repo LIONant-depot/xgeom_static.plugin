@@ -7,7 +7,7 @@
 //--------------------------------  -------------------------
   "PipelinePlugin/TypeName"                  ;string "GeomStatic"    
   "PipelinePlugin/FileExtension"             ;wstring "xgeom"               
-  "PipelinePlugin/TypeGUID/Value"            ;u64    #ACF12D9846BBD97F
+  "PipelinePlugin/TypeGUID/Value"            ;u64    #E5359948C52D26D1
   "PipelinePlugin/Icon"                      ;string "\xEE\xAE\x9F"        
   "PipelinePlugin/Details/RunAfter[]"        ;s64    0                
   "PipelinePlugin/Details/CompilationScript" ;wstring "Cache\\Plugins\\xgeom_static.plugin\\Build\\CreateAndBuildProject.bat"

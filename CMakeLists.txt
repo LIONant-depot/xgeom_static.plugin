@@ -28,6 +28,9 @@ source_group("Geom_Compiler" FILES
   "source/Compiler/main.cpp"
 )
 
+# Allow access to other plugins
+target_include_directories(${TARGET_PROJECT} PRIVATE $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/../../>)
+
 add_subdirectory("build/dependency" "${CMAKE_CURRENT_BINARY_DIR}/xgeom_static_compiler")
 
 

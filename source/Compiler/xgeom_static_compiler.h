@@ -6,7 +6,7 @@
 
 namespace xgeom_compiler
 {
-    enum class state : std::uint32_t
+    enum class state : std::uint8_t
     { OK
     , FAILURE
     };

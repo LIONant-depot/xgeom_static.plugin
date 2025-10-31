@@ -1,5 +1,5 @@
 
-#include "xgeom_compiler.h"
+#include "xgeom_static_compiler.h"
 #include "dependencies/xscheduler/source/xscheduler.h"
 
 //---------------------------------------------------------------------------------------
@@ -19,7 +19,7 @@ int main( int argc, const char* argv[] )
     //
     // This is just for debugging
     //
-    if constexpr (false)
+    if constexpr (!false)
     {
         static const char* pDebugArgs[] =
         { "TextureCompiler"
@@ -28,7 +28,7 @@ int main( int argc, const char* argv[] )
         , "-DEBUG"
         , "D1"
         , "-DESCRIPTOR"
-        , "Descriptors\\Geom\\05\\00\\B2295861246D0005.desc"
+        , "Descriptors\\GeomStatic\\05\\00\\B2295861246D0005.desc"
         , "-OUTPUT"
         , "D:\\LIONant\\xGPU\\example.lionprj\\Cache\\Resources\\Platforms\\WINDOWS"
         };

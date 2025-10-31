@@ -1,14 +1,17 @@
-#include "xgeom_compiler.h"
+#include "xgeom_static_compiler.h"
 
 #include <dependencies/xcontainer/source/xcontainer_lockless_pool.h>
 
 #include "dependencies/xraw3d/source/xraw3d.h"
+#include "dependencies/xraw3d/source/details/xraw3d_assimp_import_v2.h"
+
 #include "dependencies/meshoptimizer/src/meshoptimizer.h"
 #include "dependencies/xbitmap/source/xcolor.h"
 #include "dependencies/xbits/source/xbits.h"
 
-#include "../xgeom_rsc_descriptor.h"
-#include "../xgeom.h"
+#include "../xgeom_static_rsc_descriptor.h"
+#include "../xgeom_static.h"
+#include "../xgeom_static_details.h"
 
 #include "dependencies/xproperty/source/xcore/my_properties.cpp"
 
@@ -16,21 +19,16 @@ namespace xgeom_compiler
 {
     struct implementation : xgeom_compiler::instance
     {
+        using geom = xgeom_static::geom;
+
         struct vertex
         { 
-            struct weight
-            {
-                std::int32_t    m_iBone;
-                float           m_Weight;
-            };
-
             xmath::fvec3                    m_Position;
             std::array<xmath::fvec2, 4>     m_UVs;
             xcolori                         m_Color;
             xmath::fvec3                    m_Normal;
             xmath::fvec3                    m_Tangent;
             xmath::fvec3                    m_Binormal;
-            std::array<weight, 4>           m_Weights;
         };
 
         struct lod
@@ -58,24 +56,28 @@ namespace xgeom_compiler
             std::vector<sub_mesh>           m_SubMesh;
         };
 
+        //--------------------------------------------------------------------------------------
+
         implementation()
         {
             m_FinalGeom.Initialize();
         }
 
-        void LoadRaw( const std::wstring_view Path )
+        //--------------------------------------------------------------------------------------
+
+        xerr LoadRaw( const std::wstring_view Path )
         {
-            try
-            {
-                xraw3d::assimp::ImportAll(m_RawAnim, m_RawGeom, xstrtool::To(Path).data() );
-            }
-            catch (std::runtime_error Error)
-            {
-                printf("%s", Error.what());
-            }
+            xraw3d::assimp_v2::importer Importer;
+            Importer.m_Settings.m_bAnimated = false;
+            if ( auto Err = Importer.Import(Path, m_RawGeom); Err )
+                return xerr::create_f<state, "Failed to import the asset">(Err);
+
+            return {};
         }
 
-        void ConvertToCompilerMesh( const xgeom_rsc::descriptor& CompilerOption )
+        //--------------------------------------------------------------------------------------
+
+        void ConvertToCompilerMesh(void)
         {
             for( auto& Mesh : m_RawGeom.m_Mesh )
             {
@@ -86,8 +88,8 @@ namespace xgeom_compiler
             std::vector<std::int32_t> GeomToCompilerVertMesh( m_RawGeom.m_Facet.size() * 3          );
             std::vector<std::int32_t> MaterialToSubmesh     ( m_RawGeom.m_MaterialInstance.size()   );
 
-            int MinVert = 0;
-            int MaxVert = int(GeomToCompilerVertMesh.size()-1);
+            int MinVert     = 0;
+            int MaxVert     = int(GeomToCompilerVertMesh.size()-1);
             int CurMaterial = -1;
             int LastMesh    = -1;
 
@@ -161,14 +163,6 @@ namespace xgeom_compiler
                             for (int j = 0; j < RawVert.m_nUVs; ++j)
                                 CompilerVert.m_UVs[j] = RawVert.m_UV[j];
                         }
-
-                        for( int j = 0; j < RawVert.m_nWeights; ++j )
-                        {
-                            CompilerVert.m_Weights[j].m_iBone  = RawVert.m_Weight[j].m_iBone;
-                            CompilerVert.m_Weights[j].m_Weight = RawVert.m_Weight[j].m_Weight;
-                        }
-
-                        SubMesh.m_nWeights = std::max(SubMesh.m_nWeights , RawVert.m_nWeights );
                     }
 
                     assert( GeomToCompilerVertMesh[Face.m_iVertex[i]] >= 0 );
@@ -181,34 +175,49 @@ namespace xgeom_compiler
             }
         }
 
-        void GenenateLODs( const xgeom_rsc::descriptor& CompilerOption )
-        {
-            if( CompilerOption.m_LOD.m_GenerateLODs == false ) return;
+        //--------------------------------------------------------------------------------------
 
+        void GenenateLODs()
+        {
             for (auto& M : m_CompilerMesh)
             {
+                auto iDescMesh = m_Descriptor.findMesh( M.m_Name );
+
+                if (iDescMesh == -1)
+                    continue;
+
                 for (auto& S : M.m_SubMesh)
                 {
-                    for ( size_t i = 1; i < CompilerOption.m_LOD.m_MaxLODs; ++i )
+                    if (m_Descriptor.m_MeshList[iDescMesh].m_LODs.size())
                     {
-                        const float       threshold               = std::powf(CompilerOption.m_LOD.m_LODReduction, float(i));
-                        const std::size_t target_index_count      = std::size_t(S.m_Indices.size() * threshold) / 3 * 3;
-                        const float       target_error            = 1e-2f;
-                        const auto&       Source                  = (S.m_LODs.size())? S.m_LODs.back().m_Indices : S.m_Indices;
+                        std::size_t IndexCount = S.m_Indices.size();
 
-                        if( Source.size() < target_index_count )
-                            break;
+                        for ( size_t i = 0; i < m_Descriptor.m_MeshList[iDescMesh].m_LODs.size(); ++i)
+                        {
+                            //const float       threshold               = std::powf(m_Descriptor.m_MeshList[iDescMesh].m_LODs[i].m_LODReduction, float(i));
+                            const std::size_t target_index_count      = std::size_t(IndexCount * m_Descriptor.m_MeshList[iDescMesh].m_LODs[i].m_LODReduction + 0.005f) / 3 * 3;
+                            const float       target_error            = 1e-2f;
+                            const auto&       Source                  = (S.m_LODs.size())? S.m_LODs.back().m_Indices : S.m_Indices;
 
-                        auto& NewLod = S.m_LODs.emplace_back();
+                            if( Source.size() < target_index_count )
+                                break;
 
-                        NewLod.m_Indices.resize(Source.size());
-                        NewLod.m_Indices.resize( meshopt_simplify( NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position.m_X, S.m_Vertex.size(), sizeof(vertex), target_index_count, target_error));
+                            auto& NewLod = S.m_LODs.emplace_back();
+
+                            NewLod.m_Indices.resize(Source.size());
+                            NewLod.m_Indices.resize( meshopt_simplify( NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position.m_X, S.m_Vertex.size(), sizeof(vertex), target_index_count, target_error));
+
+                            // Set the new count
+                            IndexCount = NewLod.m_Indices.size();
+                        }
                     }
                 }
             }
         }
 
-        void optimizeFacesAndVerts( const xgeom_rsc::descriptor& CompilerOption )
+        //--------------------------------------------------------------------------------------
+
+        void optimizeFacesAndVerts()
         {
             for( auto& M : m_CompilerMesh)
             {
@@ -227,709 +236,772 @@ namespace xgeom_compiler
             }
         }
 
-        void GenerateFinalMesh(const xgeom_rsc::descriptor& CompilerOption)
+        //--------------------------------------------------------------------------------------
+
+        // Helpers
+        static xmath::fvec2 oct_wrap(xmath::fvec2 v) noexcept
         {
-            std::vector<std::uint32_t>  Indices32;
-            std::vector<vertex>         FinalVertex;
-            std::vector<xgeom::mesh>    FinalMeshes;
-            std::vector<xgeom::submesh> FinalSubmeshes;
-            std::vector<xgeom::lod>     FinalLod;
-            int                         UVDimensionCount     = 0;
-            int                         WeightDimensionCount = 0;
-            int                         ColorDimensionCount  = 0;
+            return (xmath::fvec2(1.0f) - xmath::fvec2(v.m_Y, v.m_X).Abs()) * (v.Step({0}) * 2.0f - 1.0f);
+        }
 
-            FinalMeshes.resize(m_CompilerMesh.size() );
+        //--------------------------------------------------------------------------------------
 
-            for( int iMesh = 0; iMesh < FinalMeshes.size(); ++iMesh )
+        static xmath::fvec2 oct_encode(xmath::fvec3 n) noexcept
+        {
+            n /= (xmath::Abs(n.m_X) + xmath::Abs(n.m_Y) + xmath::Abs(n.m_Z));
+            xmath::fvec2 p = xmath::fvec2(n.m_X, n.m_Y);
+            if (n.m_Z < 0.0f) p = oct_wrap(p);
+            return p;
+        }
+
+        //--------------------------------------------------------------------------------------
+
+        struct BBox3
+        {
+            xmath::fvec3 m_MinPos = xmath::fvec3(std::numeric_limits<float>::max());
+            xmath::fvec3 m_MaxPos = xmath::fvec3(std::numeric_limits<float>::lowest());
+
+            void Update(const xmath::fvec3& p) noexcept
             {
-                auto& FinalMesh = FinalMeshes[iMesh];
-                auto& CompMesh  = m_CompilerMesh[iMesh];
+                m_MinPos = m_MinPos.Min(p);
+                m_MaxPos = m_MaxPos.Max(p);
+            }
 
-                strcpy_s( FinalMesh.m_Name.data(), FinalMesh.m_Name.size(), CompMesh.m_Name.c_str() );
+            xmath::fbbox to_fbbox() const
+            {  
+                xmath::fbbox bb;
+                bb.m_Min = m_MinPos;
+                bb.m_Max = m_MaxPos;
+                return bb;
+            }
+        };
 
-                FinalMesh.m_iLOD  = std::uint16_t( FinalLod.size() );
-                FinalMesh.m_nLODs = 0;
+        //--------------------------------------------------------------------------------------
 
-                auto& FinalLOD = FinalLod.emplace_back();
+        struct BBox2
+        {
+            xmath::fvec2 m_MinUV = xmath::fvec2(std::numeric_limits<float>::max());
+            xmath::fvec2 m_MaxUV = xmath::fvec2(std::numeric_limits<float>::lowest());
 
-                FinalLOD.m_iSubmesh = std::uint16_t(FinalSubmeshes.size());
-                FinalLOD.m_nSubmesh = std::uint16_t(CompMesh.m_SubMesh.size());
+            void Update(const xmath::fvec2& uv)
+            {
+                m_MinUV = m_MinUV.Min(uv);
+                m_MaxUV = m_MaxUV.Max(uv);
+            }
+        };
 
-                //
-                // Gather LOD 0
-                //
-                std::vector<int> SubmeshStartIndex;
-                for( auto& S : CompMesh.m_SubMesh )
+        //--------------------------------------------------------------------------------------
+
+        // Cluster for recursive splitting (triangle ids)
+        struct TriCluster
+        {
+            std::vector<uint32_t> tri_ids;
+        };
+
+        // Vertex group for palette clustering
+        static void RecursePosCluster
+        ( const std::vector<vertex>&                    Verts
+        ,       std::vector<uint32_t>                   Group
+        , const float                                   MaxExtent
+        ,       std::vector<geom::pos_palette_entry>&   PosPalettes
+        ,       std::vector<int>&                       VertPal
+        )
+        {
+            if (Group.empty()) return;
+
+            BBox3 bb;
+            for (uint32_t vi : Group) bb.Update(Verts[vi].m_Position);
+
+            xmath::fvec3 extent = bb.m_MaxPos - bb.m_MinPos;
+            float max_e = xmath::Max(xmath::Max(extent.m_X, extent.m_Y), extent.m_Z);
+
+            if (max_e <= MaxExtent) 
+            {
+                xmath::fvec3 center = (bb.m_MinPos + bb.m_MaxPos) * 0.5f;
+                xmath::fvec3 scale  = xmath::fvec3::Max((bb.m_MaxPos - bb.m_MinPos) * 0.5f, xmath::fvec3(1e-6f));
+
+                int pal_id = static_cast<int>(PosPalettes.size());
+                if (pal_id > 127) 
                 {
-                    const auto iBaseVertex = FinalVertex.size();
-                    SubmeshStartIndex.push_back((int)iBaseVertex);
-                    auto& FinalSubmesh = FinalSubmeshes.emplace_back();
-
-                    FinalSubmesh.m_iMaterial = S.m_iMaterial;
-                    FinalSubmesh.m_iIndex    = std::uint32_t(Indices32.size());
-                    FinalSubmesh.m_nIndices  = std::uint32_t(S.m_Indices.size());
-
-                    UVDimensionCount        = std::max( S.m_nUVs, UVDimensionCount );
-                    WeightDimensionCount    = std::max( S.m_nWeights, WeightDimensionCount );
-                    ColorDimensionCount     = std::max( S.m_bHasColor?1:0, ColorDimensionCount );
-
-                    for( const auto& Index : S.m_Indices )
-                    {
-                        Indices32.push_back( std::uint32_t(Index + iBaseVertex) );
-                    }
-
-                    // Initialize the bboxs 
-                    FinalMesh.m_BBox   = xmath::fbbox::fromIdentity();
-                    m_FinalGeom.m_BBox = xmath::fbbox::fromIdentity();
-
-                    for( const auto& Verts : S.m_Vertex )
-                    {
-                        FinalMesh.m_BBox.AddVerts  ({&Verts.m_Position, 1});
-                        m_FinalGeom.m_BBox.AddVerts({&Verts.m_Position, 1});
-                        FinalVertex.push_back(Verts);
-                    }
+                    throw std::runtime_error("Too many position palettes (max 128).");
                 }
 
-                //
-                // Gather LOD 1... to n
-                //
-                do
+                geom::pos_palette_entry entry;
+                entry.m_Scale.m_X  = scale.m_X;  entry.m_Scale.m_Y  = scale.m_Y;  entry.m_Scale.m_Z  = scale.m_Z;
+                entry.m_Offset.m_X = center.m_X; entry.m_Offset.m_Y = center.m_Y; entry.m_Offset.m_Z = center.m_Z;
+                PosPalettes.push_back(entry);
+
+                for (uint32_t vi : Group) VertPal[vi] = pal_id;
+            }
+            else 
+            {
+                int axis = 0;
+                if (extent[1] > extent[axis]) axis = 1;
+                if (extent[2] > extent[axis]) axis = 2;
+
+                std::sort(Group.begin(), Group.end(), [&](std::uint32_t a, std::uint32_t b)
                 {
-                    auto& LOD = FinalLod.emplace_back();
-                    LOD.m_iSubmesh = std::uint16_t(FinalSubmeshes.size());
-                    LOD.m_nSubmesh = 0;
+                    return Verts[a].m_Position[axis] < Verts[b].m_Position[axis];
+                });
 
-                    int iLocalSubmesh = -1;
-                    for( auto& S : CompMesh.m_SubMesh )
+                std::size_t half = Group.size() / 2;
+                std::vector<std::uint32_t> g1(Group.begin(), Group.begin() + half);
+                std::vector<std::uint32_t> g2(Group.begin() + half, Group.end());
+
+                RecursePosCluster(Verts, g1, MaxExtent, PosPalettes, VertPal);
+                RecursePosCluster(Verts, g2, MaxExtent, PosPalettes, VertPal);
+            }
+        }
+
+        //--------------------------------------------------------------------------------------
+
+        static void RecurseUVCluster
+        ( const std::vector<vertex>&                 Verts
+        ,       std::vector<uint32_t>                Group
+        , const float                                MaxExtent
+        ,       std::vector<geom::uv_palette_entry>& UVPalettes
+        ,       std::vector<int>&                    VertPal
+        )
+        {
+            if (Group.empty()) return;
+
+            BBox2 bb;
+            for (uint32_t vi : Group) bb.Update(Verts[vi].m_UVs[0]);  // Use first UV
+
+            xmath::fvec2 extent = bb.m_MaxUV - bb.m_MinUV;
+            float max_e = xmath::Max(extent.m_X, extent.m_Y);
+
+            if (max_e <= MaxExtent) 
+            {
+                xmath::fvec2 uv_scale = xmath::fvec2::Max(bb.m_MaxUV - bb.m_MinUV, xmath::fvec2(1e-6f));
+
+                int pal_id = static_cast<int>(UVPalettes.size());
+                if (pal_id > 255) 
+                {
+                    throw std::runtime_error("Too many UV palettes (max 256).");
+                }
+
+                geom::uv_palette_entry entry;
+                entry.m_ScaleAndOffset.m_X  = uv_scale.m_X;     entry.m_ScaleAndOffset.m_Y  = uv_scale.m_Y;
+                entry.m_ScaleAndOffset.m_Z  = bb.m_MinUV.m_X;   entry.m_ScaleAndOffset.m_W = bb.m_MinUV.m_Y;
+                UVPalettes.push_back(entry);
+
+                for (uint32_t vi : Group) VertPal[vi] = pal_id;
+            }
+            else 
+            {
+                int axis = (extent.m_X > extent.m_Y) ? 0 : 1;
+
+                std::sort(Group.begin(), Group.end(), [&](std::uint32_t a, std::uint32_t b)
+                {
+                    return Verts[a].m_UVs[0][axis] < Verts[b].m_UVs[0][axis];
+                });
+
+                std::size_t half = Group.size() / 2;
+                std::vector<std::uint32_t> g1(Group.begin(), Group.begin() + half);
+                std::vector<std::uint32_t> g2(Group.begin() + half, Group.end());
+
+                RecurseUVCluster(Verts, g1, MaxExtent, UVPalettes, VertPal);
+                RecurseUVCluster(Verts, g2, MaxExtent, UVPalettes, VertPal);
+            }
+        }
+
+        //--------------------------------------------------------------------------------------
+
+        // Split into clusters (GPU chunks)
+        static void RecurseClusterSplit
+        ( const std::vector<vertex>&                    InputVerts
+        , const std::vector<uint32_t>&                  InputIndices
+        , const TriCluster&                             c
+        , uint32_t                                      MaxVerts
+        , const std::vector<int>&                       VertPosPal
+        , const std::vector<int>&                       VertUVPal
+        , const std::vector<float>&                     BinormalSigns
+        , const std::vector<geom::pos_palette_entry>&   PosPalettes
+        , const std::vector<geom::uv_palette_entry>&    UVPalettes
+        , std::vector<geom::cluster>&                   OutputClusters
+        , std::vector<geom::vertex>&                    AllStaticVerts
+        , std::vector<geom::vertex_extras>&             AllExtrasVerts
+        , std::vector<uint32_t>&                        AllIndices
+        )
+        {
+            if (c.tri_ids.empty()) return;
+
+            std::unordered_set<uint32_t> used_verts;
+            for (uint32_t ti : c.tri_ids) 
+            {
+                for (int j = 0; j < 3; ++j) 
+                {
+                    used_verts.insert(InputIndices[ti * 3 + j]);
+                }
+            }
+
+            if (used_verts.size() <= MaxVerts) 
+            {
+                // Remap verts locally
+                std::vector<uint32_t> new_vert_ids(used_verts.begin(), used_verts.end());
+                std::sort(new_vert_ids.begin(), new_vert_ids.end());
+                std::unordered_map<uint32_t, uint32_t> old_to_new;
+                uint32_t new_id = 0;
+                for (uint32_t ov : new_vert_ids) 
+                {
+                    old_to_new[ov] = new_id++;
+                }
+
+                // Compute cluster bbox
+                BBox3 cluster_bb;
+                for (uint32_t ov : new_vert_ids) 
+                {
+                    cluster_bb.Update(InputVerts[ov].m_Position);
+                }
+
+                // Append verts to global
+                uint32_t cluster_vert_start = static_cast<uint32_t>(AllStaticVerts.size());
+                AllStaticVerts.resize(AllStaticVerts.size() + new_vert_ids.size());
+                AllExtrasVerts.resize(AllExtrasVerts.size() + new_vert_ids.size());
+                for (uint32_t i = 0; i < new_vert_ids.size(); ++i) 
+                {
+                    uint32_t        ov          = new_vert_ids[i];
+                    const vertex&   v           = InputVerts[ov];
+                    int             pos_pal_id  = VertPosPal[ov];
+                    int             uv_pal_id   = VertUVPal[ov];
+                    float           sign_val    = BinormalSigns[ov];
+                    int             sign_bit    = (sign_val < 0.0f ? 1 : 0);
+
+                    // Pos compression
+                    const auto&     pos_entry   = PosPalettes[pos_pal_id];
+                    const auto      center      = xmath::fvec3(pos_entry.m_Offset.m_X, pos_entry.m_Offset.m_Y, pos_entry.m_Offset.m_Z);
+                    const auto      scale       = xmath::fvec3(pos_entry.m_Scale.m_X,  pos_entry.m_Scale.m_Y,  pos_entry.m_Scale.m_Z);
+                    const float     nx          = ((v.m_Position.m_X - center.m_X) / scale.m_X + 1.0f) * 32767.5f - 32768.0f;
+                    const float     ny          = ((v.m_Position.m_Y - center.m_Y) / scale.m_Y + 1.0f) * 32767.5f - 32768.0f;
+                    const float     nz          = ((v.m_Position.m_Z - center.m_Z) / scale.m_Z + 1.0f) * 32767.5f - 32768.0f;
+                    geom::vertex&   sv          = AllStaticVerts[cluster_vert_start + i];
+
+                    sv.m_XPos   = static_cast<int16_t>(std::round(nx));
+                    sv.m_YPos   = static_cast<int16_t>(std::round(ny));
+                    sv.m_ZPos   = static_cast<int16_t>(std::round(nz));
+                    sv.m_Extra  = sign_bit | (pos_pal_id << 1) | (uv_pal_id << 8);
+
+                    // UV (first only)
+                    const auto&             uv_entry    = UVPalettes[uv_pal_id];
+                    const auto              uv_min      = xmath::fvec2(uv_entry.m_ScaleAndOffset.m_Z, uv_entry.m_ScaleAndOffset.m_W);
+                    const auto              uv_scale    = xmath::fvec2(uv_entry.m_ScaleAndOffset.m_X, uv_entry.m_ScaleAndOffset.m_Y);
+                    const auto              norm_uv     = (v.m_UVs[0] - uv_min) / uv_scale;
+                    geom::vertex_extras&    ev          = AllExtrasVerts[cluster_vert_start + i];
+
+                    ev.m_UV[0] = static_cast<uint16_t>(std::round(norm_uv.m_X * 65535.0f));
+                    ev.m_UV[1] = static_cast<uint16_t>(std::round(norm_uv.m_Y * 65535.0f));
+
+                    // Oct normal/tangent
+                    const auto oct_n = oct_encode(v.m_Normal.NormalizeSafeCopy());
+                    ev.m_OctNormal[0] = static_cast<int16_t>(std::round(oct_n.m_X * 32767.0f));
+                    ev.m_OctNormal[1] = static_cast<int16_t>(std::round(oct_n.m_Y * 32767.0f));
+
+                    const auto oct_t = oct_encode(v.m_Tangent.NormalizeSafeCopy());
+                    ev.m_OctTangent[0] = static_cast<int16_t>(std::round(oct_t.m_X * 32767.0f));
+                    ev.m_OctTangent[1] = static_cast<int16_t>(std::round(oct_t.m_Y * 32767.0f));
+                }
+
+                // Append indices to global (remapped)
+                uint32_t cluster_index_start = static_cast<uint32_t>(AllIndices.size());
+                for (uint32_t ti : c.tri_ids) 
+                {
+                    for (int j = 0; j < 3; ++j) 
                     {
-                        iLocalSubmesh++;
-                        if( FinalMesh.m_nLODs >= S.m_LODs.size() ) continue;
+                        uint32_t ov = InputIndices[ti * 3 + j];
+                        AllIndices.push_back(old_to_new[ov]);
+                    }
+                }
+            }
+            else
+            {
+                BBox3 bb;
+                for (uint32_t ti : c.tri_ids) 
+                {
+                    for (int j = 0; j < 3; ++j) 
+                    {
+                        uint32_t vi = InputIndices[ti * 3 + j];
+                        bb.Update(InputVerts[vi].m_Position);
+                    }
+                }
+                xmath::fvec3    extent  = bb.m_MaxPos - bb.m_MinPos;
+                int             axis    = 0;
+                float           max_e   = extent[0];
+                if (extent[1] > max_e) { max_e = extent[1]; axis = 1; }
+                if (extent[2] > max_e) { max_e = extent[2]; axis = 2; }
+                float split_pos = (bb.m_MinPos[axis] + bb.m_MaxPos[axis]) * 0.5f;
 
-                        const auto iBaseVertex = SubmeshStartIndex[iLocalSubmesh];
-                        LOD.m_nSubmesh++;
+                TriCluster c1, c2;
+                for (uint32_t ti : c.tri_ids) 
+                {
+                    xmath::fvec3 cent = (InputVerts[InputIndices[ti * 3 + 0]].m_Position +
+                                         InputVerts[InputIndices[ti * 3 + 1]].m_Position +
+                                         InputVerts[InputIndices[ti * 3 + 2]].m_Position) / 3.0f;
+                    if (cent[axis] < split_pos) c1.tri_ids.push_back(ti);
+                    else                        c2.tri_ids.push_back(ti);
+                }
 
-                        auto& FinalSubmesh = FinalSubmeshes.emplace_back();
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, VertPosPal, VertUVPal, BinormalSigns, PosPalettes, UVPalettes, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, VertPosPal, VertUVPal, BinormalSigns, PosPalettes, UVPalettes, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
+            }
+        }
 
-                        FinalSubmesh.m_iMaterial = S.m_iMaterial;
-                        FinalSubmesh.m_iIndex    = std::uint32_t(Indices32.size());
-                        FinalSubmesh.m_nIndices  = std::uint32_t(S.m_Indices.size());
+        //--------------------------------------------------------------------------------------
 
-                        for (const auto& Index : S.m_Indices)
+        void ConvertToGeom(float target_precision)
+        {
+            const std::vector<mesh>& compiler_meshes = m_CompilerMesh;
+            geom& result = m_FinalGeom;
+
+            std::vector<geom::mesh>                 OutMeshes;
+            std::vector<geom::lod>                  OutLODs;
+            std::vector<geom::submesh>              OutSubmeshes;
+            std::vector<geom::cluster>              OutClusters;
+            std::vector<geom::pos_palette_entry>    OutPosPalettes;
+            std::vector<geom::uv_palette_entry>     OutUVPalettes;
+            std::vector<geom::vertex>               OutAllStaticVerts;
+            std::vector<geom::vertex_extras>        OutAllExtrasVerts;
+            std::vector<uint32_t>                   OutAllIndices;
+            BBox3                                   OutGlobalBBox;
+
+            uint16_t current_lod_idx        = 0;
+            uint16_t current_submesh_idx    = 0;
+            uint16_t current_cluster_idx    = 0;
+
+            float max_extent = target_precision * 65535.0f;
+
+            for (const auto& input_mesh : compiler_meshes) 
+            {
+                BBox3       mesh_bb         = {};
+                float       total_edge_len  = 0.0f;
+                uint32_t    num_edges       = 0;
+
+                for (const auto& input_sm : input_mesh.m_SubMesh) 
+                {
+                    for (const auto& v : input_sm.m_Vertex) 
+                    {
+                        mesh_bb.Update(v.m_Position);
+                        OutGlobalBBox.Update(v.m_Position);
+                    }
+
+                    for (const auto& lod_in : input_sm.m_LODs) 
+                    {
+                        for (size_t ti = 0; ti < lod_in.m_Indices.size() / 3; ++ti) 
                         {
-                            Indices32.push_back(std::uint32_t(Index + iBaseVertex));
+                            std::uint32_t i1 = lod_in.m_Indices[ti * 3 + 0];
+                            std::uint32_t i2 = lod_in.m_Indices[ti * 3 + 1];
+                            std::uint32_t i3 = lod_in.m_Indices[ti * 3 + 2];
+                            total_edge_len += (input_sm.m_Vertex[i1].m_Position - input_sm.m_Vertex[i2].m_Position).Length();
+                            total_edge_len += (input_sm.m_Vertex[i2].m_Position - input_sm.m_Vertex[i3].m_Position).Length();
+                            total_edge_len += (input_sm.m_Vertex[i3].m_Position - input_sm.m_Vertex[i1].m_Position).Length();
+                            num_edges += 3;
                         }
                     }
+                }
 
-                    if( LOD.m_nSubmesh == 0 )
+                geom::mesh out_m;
+                xstrtool::Copy(out_m.m_Name, input_mesh.m_Name);
+                out_m.m_Name[31]        = '\0';
+                out_m.m_WorldPixelSize  = (num_edges > 0) ? total_edge_len / num_edges : 0.0f;
+                out_m.m_BBox            = mesh_bb.to_fbbox();
+                out_m.m_nLODs           = static_cast<uint16_t>(input_mesh.m_SubMesh.empty() ? 0 : input_mesh.m_SubMesh[0].m_LODs.size());
+                out_m.m_iLOD            = current_lod_idx;
+                OutMeshes.push_back(out_m);
+                current_lod_idx += out_m.m_nLODs;
+
+                for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level) 
+                {
+                    geom::lod out_l;
+                    out_l.m_ScreenArea  = input_mesh.m_SubMesh.empty() ? 0.0f : input_mesh.m_SubMesh[0].m_LODs[lod_level].m_ScreenArea;
+                    out_l.m_iSubmesh    = current_submesh_idx;
+                    out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
+                    OutLODs.push_back(out_l);
+                    current_submesh_idx += out_l.m_nSubmesh;
+
+                    for (const auto& input_sm : input_mesh.m_SubMesh) 
                     {
-                        FinalLod.erase(FinalLod.end()-1);
-                        break;
-                    }
-                    else
-                    {
-                        FinalMesh.m_nLODs++;
-                    }
+                        geom::submesh out_sm;
+                        out_sm.m_iMaterial  = static_cast<uint16_t>(input_sm.m_iMaterial);
+                        out_sm.m_iCluster   = current_cluster_idx;
 
-                } while(true);
-            }
+                        const std::vector<uint32_t>& lod_indices = (lod_level < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level].m_Indices : input_sm.m_Indices;
 
-            //-----------------------------------------------------------------------------------
-            // Final Optimization Step. Optimize vertex location and remap the indices.
-            //-----------------------------------------------------------------------------------
-
-            // vertex fetch optimization should go last as it depends on the final index order
-            // note that the order of LODs above affects vertex fetch results
-            FinalVertex.resize( meshopt_optimizeVertexFetch( FinalVertex.data(), Indices32.data(), Indices32.size(), FinalVertex.data(), FinalVertex.size(), sizeof(FinalVertex[0]) ) );
-
-            const int kCacheSize = 16;
-            m_VertCacheStats = meshopt_analyzeVertexCache(Indices32.data(), Indices32.size(), FinalVertex.size(), kCacheSize, 0, 0);
-            m_VertFetchStats = meshopt_analyzeVertexFetch(Indices32.data(), Indices32.size(), FinalVertex.size(), sizeof(FinalVertex[0]));
-            m_OverdrawStats  = meshopt_analyzeOverdraw   (Indices32.data(), Indices32.size(), &FinalVertex[0].m_Position.m_X, FinalVertex.size(), sizeof(FinalVertex[0]) );
-
-            m_VertCacheNVidiaStats  = meshopt_analyzeVertexCache(Indices32.data(), Indices32.size(), FinalVertex.size(), 32, 32, 32);
-            m_VertCacheAMDStats     = meshopt_analyzeVertexCache(Indices32.data(), Indices32.size(), FinalVertex.size(), 14, 64, 128);
-            m_VertCacheIntelStats   = meshopt_analyzeVertexCache(Indices32.data(), Indices32.size(), FinalVertex.size(), 128, 0, 0);
-
-            // TODO: Translate this information into a scoring system that goes from 100% to 0% (or something that makes more sense to casual users)
-            printf("INFO: ACMR %f ATVR %f (NV %f AMD %f Intel %f) Overfetch %f Overdraw %f\n"
-            , m_VertCacheStats.acmr         // transformed vertices / triangle count; best case 0.5, worst case 3.0, optimum depends on topology
-            , m_VertCacheStats.atvr         // transformed vertices / vertex count; best case 1.0, worst case 6.0, optimum is 1.0 (each vertex is transformed once)
-            , m_VertCacheNVidiaStats.atvr   // transformed vertices / vertex count; best case 1.0, worst case 6.0, optimum is 1.0 (each vertex is transformed once)
-            , m_VertCacheAMDStats.atvr      // transformed vertices / vertex count; best case 1.0, worst case 6.0, optimum is 1.0 (each vertex is transformed once)
-            , m_VertCacheIntelStats.atvr    // transformed vertices / vertex count; best case 1.0, worst case 6.0, optimum is 1.0 (each vertex is transformed once)
-            , m_VertFetchStats.overfetch    // fetched bytes / vertex buffer size; best case 1.0 (each byte is fetched once)
-            , m_OverdrawStats.overdraw      // fetched bytes / vertex buffer size; best case 1.0 (each byte is fetched once)
-            );
-
-            //-----------------------------------------------------------------------------------
-            // Create Stream Infos
-            //-----------------------------------------------------------------------------------
-            std::size_t MaxVertAligment = 1u;
-
-            m_FinalGeom.m_nStreamInfos        = 0;
-            m_FinalGeom.m_nStreams            = 0;
-            m_FinalGeom.m_StreamTypes.m_Value = 0;
-
-            //
-            // Deal in indices
-            //
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-                Stream.m_ElementsType.m_Value       = 0;
-
-                Stream.m_VectorCount                = 1;
-                Stream.m_Format                     = Indices32.size() > 0xffffu ? xgeom::stream_info::format::UINT32_1D : xgeom::stream_info::format::UINT16_1D;
-                Stream.m_ElementsType.m_bIndex      = true;
-                Stream.m_Offset                     = 0;
-                Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                m_FinalGeom.m_StreamTypes.m_bIndex  = true;
-                m_FinalGeom.m_nStreams++;
-                m_FinalGeom.m_nStreamInfos++;
-            }
-
-
-            //
-            // Deal with Position
-            //
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-                Stream.m_ElementsType.m_Value       = 0;
-
-                Stream.m_VectorCount                = 1;
-                Stream.m_Format                     = xgeom::stream_info::format::FLOAT_3D;
-                Stream.m_ElementsType.m_bPosition   = true;
-                Stream.m_Offset                     = 0;
-                Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                m_FinalGeom.m_StreamTypes.m_bPosition = true;
-                m_FinalGeom.m_nStreamInfos++;
-
-                if( CompilerOption.m_Streams.m_UseElementStreams || CompilerOption.m_Streams.m_SeparatePosition )
-                {
-                    m_FinalGeom.m_nStreams++;
-                }
-            }
-
-            //
-            // Deal with UVs
-            //
-            if( UVDimensionCount 
-             && (  CompilerOption.m_Cleanup.m_bRemoveUVs[0] == false
-                || CompilerOption.m_Cleanup.m_bRemoveUVs[1] == false
-                || CompilerOption.m_Cleanup.m_bRemoveUVs[2] == false
-                || CompilerOption.m_Cleanup.m_bRemoveUVs[3] == false ) )
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-
-                // Make sure the base offset is set
-                Stream.m_Offset = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_iStream != m_FinalGeom.m_nStreams
-                    ? 0
-                    : m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_Offset 
-                        + m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].getSize();
-
-                Stream.m_ElementsType.m_Value       = 0;
-
-                Stream.m_VectorCount     = [&] { int k = 0; for (int i = 0; i < UVDimensionCount; i++) if (CompilerOption.m_Cleanup.m_bRemoveUVs[i] == false) k++; return k; }();
-                Stream.m_Format          = xgeom::stream_info::format::FLOAT_2D;
-
-                // Do we still have UVs?
-                if( Stream.m_VectorCount )
-                {
-                    Stream.m_ElementsType.m_bUVs        = true;
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(float));
-                    MaxVertAligment = std::max(MaxVertAligment, alignof(float));
-
-                    m_FinalGeom.m_nStreamInfos++;
-                    m_FinalGeom.m_StreamTypes.m_bUVs = true;
-
-                    if (CompilerOption.m_Streams.m_UseElementStreams) m_FinalGeom.m_nStreams++;
-                }
-            }
-
-            //
-            // Deal with Color
-            //
-            if( CompilerOption.m_Cleanup.m_bRemoveColor  == false && ColorDimensionCount )
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-
-                // Make sure the base offset is set
-                Stream.m_Offset = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_iStream != m_FinalGeom.m_nStreams
-                    ? 0
-                    : m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_Offset 
-                        + m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].getSize();
-
-                Stream.m_ElementsType.m_Value       = 0;
-
-                Stream.m_VectorCount                = 1;
-                Stream.m_Format                     = xgeom::stream_info::format::UINT8_4D_NORMALIZED;
-                Stream.m_ElementsType.m_bColor      = true;
-                Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(xcolori));
-                MaxVertAligment = std::max(MaxVertAligment, alignof(xcolori));
-
-                m_FinalGeom.m_nStreamInfos++;
-                m_FinalGeom.m_StreamTypes.m_bColor = true;
-
-                if (CompilerOption.m_Streams.m_UseElementStreams) m_FinalGeom.m_nStreams++;
-            }
-
-            //
-            // Deal with Bone Weights
-            // 
-            if( WeightDimensionCount && CompilerOption.m_Cleanup.m_bRemoveBones == false )
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-
-                // Make sure the base offset is set
-                Stream.m_Offset = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_iStream != m_FinalGeom.m_nStreams
-                    ? 0
-                    : m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_Offset
-                    + m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].getSize();
-
-                if( CompilerOption.m_Streams.m_bCompressWeights )
-                {
-                    Stream.m_ElementsType.m_Value       = 0;
-
-                    Stream.m_VectorCount                = std::uint8_t(WeightDimensionCount);
-                    Stream.m_Format                     = xgeom::stream_info::format::UINT8_1D_NORMALIZED;
-                    Stream.m_ElementsType.m_bBoneWeights= true;
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(std::uint8_t));
-                    MaxVertAligment = std::max(MaxVertAligment, alignof(std::uint8_t));
-                }
-                else
-                {
-                    Stream.m_ElementsType.m_Value       = 0;
-
-                    Stream.m_VectorCount                = std::uint8_t(WeightDimensionCount);
-                    Stream.m_Format                     = xgeom::stream_info::format::FLOAT_1D;
-                    Stream.m_ElementsType.m_bBoneWeights= true; 
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(float));
-                    MaxVertAligment = std::max(MaxVertAligment, alignof(float));
-                }
-
-                m_FinalGeom.m_nStreamInfos++;
-                m_FinalGeom.m_StreamTypes.m_bBoneWeights = true;
-
-                if (CompilerOption.m_Streams.m_UseElementStreams) m_FinalGeom.m_nStreams++;
-            }
-
-            //
-            // Deal with Bone Indices
-            // 
-            if( WeightDimensionCount && CompilerOption.m_Cleanup.m_bRemoveBones == false )
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-
-                // Make sure the base offset is set
-                Stream.m_Offset = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_iStream != m_FinalGeom.m_nStreams
-                    ? 0
-                    : m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_Offset
-                    + m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].getSize();
-
-                if( CompilerOption.m_Streams.m_bCompressWeights || (m_RawGeom.m_Bone.size() < 0xff) )
-                {
-                    Stream.m_ElementsType.m_Value       = 0;
-
-                    Stream.m_VectorCount                = std::uint8_t(WeightDimensionCount);
-                    Stream.m_Format                     = xgeom::stream_info::format::UINT8_1D;
-                    Stream.m_ElementsType.m_bBoneIndices= true;
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(std::uint8_t));
-                    MaxVertAligment = std::max(MaxVertAligment, alignof(std::uint8_t));
-                }
-                else
-                {
-                    Stream.m_ElementsType.m_Value       = 0;
-
-                    Stream.m_VectorCount                = std::uint8_t(WeightDimensionCount);
-                    Stream.m_Format                     = xgeom::stream_info::format::UINT16_1D;
-                    Stream.m_ElementsType.m_bBoneIndices= true;
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(std::uint16_t));
-                    MaxVertAligment = std::max(MaxVertAligment, alignof(std::uint16_t));
-                }
-
-                m_FinalGeom.m_nStreamInfos++;
-                m_FinalGeom.m_StreamTypes.m_bBoneIndices = true;
-
-                if (CompilerOption.m_Streams.m_UseElementStreams) m_FinalGeom.m_nStreams++;
-            }
-
-            //
-            // Deal with normals
-            //
-            if( CompilerOption.m_Cleanup.m_bRemoveBTN == false )
-            {
-                auto& Stream = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos];
-
-                // If the position has a different stream then our offset should be zero
-                // Other wise we are dealing with a single vertex structure. In that case
-                // we should set our offset propertly.
-                Stream.m_Offset = m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_iStream != m_FinalGeom.m_nStreams 
-                    ? 0
-                    : m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_Offset 
-                        + m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].getSize();
-
-                if( CompilerOption.m_Streams.m_bCompressBTN == false )
-                {
-                    Stream.m_ElementsType.m_Value       = 0;
-
-                    Stream.m_VectorCount                = 3;
-                    Stream.m_Format                     = xgeom::stream_info::format::FLOAT_3D;
-                    Stream.m_ElementsType.m_bBTNs       = true;
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(xmath::fvec3d));
-                    MaxVertAligment = std::max( MaxVertAligment, alignof(xmath::fvec3d) );
-                }
-                else
-                {
-                    Stream.m_ElementsType.m_Value       = 0;
-
-                    Stream.m_VectorCount                = 3;
-                    Stream.m_Format                     = xgeom::stream_info::format::SINT8_3D_NORMALIZED;
-                    Stream.m_ElementsType.m_bBTNs       = true;
-                    Stream.m_iStream                    = m_FinalGeom.m_nStreams;
-
-                    Stream.m_Offset = xbits::Align(Stream.m_Offset, alignof(std::int8_t));
-                    MaxVertAligment = std::max(MaxVertAligment, alignof(std::int8_t));
-                }
-
-                m_FinalGeom.m_nStreamInfos++;
-                m_FinalGeom.m_StreamTypes.m_bBTNs = true;
-
-                if (CompilerOption.m_Streams.m_UseElementStreams) m_FinalGeom.m_nStreams++;
-            }
-
-            // We add another one if we are not doing streams
-            if (CompilerOption.m_Streams.m_UseElementStreams == false )
-            {
-                m_FinalGeom.m_nStreams++;
-            }
-
-            //
-            // Fill up the rest of the info
-            //
-            m_FinalGeom.m_nMaterials          = std::uint16_t(m_RawGeom.m_MaterialInstance.size());
-            m_FinalGeom.m_nMeshes             = std::uint16_t(FinalMeshes.size());
-            m_FinalGeom.m_nSubMeshs           = std::uint16_t(FinalSubmeshes.size());
-            m_FinalGeom.m_nIndices            = std::uint16_t(Indices32.size());
-            m_FinalGeom.m_nVertices           = std::uint32_t(FinalVertex.size());
-            m_FinalGeom.m_nLODs               = std::uint16_t(FinalLod.size());
-
-            m_FinalGeom.m_CompactedVertexSize = CompilerOption.m_Streams.m_UseElementStreams
-                                                ? std::uint8_t(0)
-                                                : std::uint8_t( xbits::Align((std::uint32_t)m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].m_Offset
-                                                                                                + m_FinalGeom.m_StreamInfo[m_FinalGeom.m_nStreamInfos - 1].getSize()
-                                                                                                , (int)MaxVertAligment ) );
-            m_FinalGeom.m_nBones        = 0;
-            m_FinalGeom.m_nDisplayLists = 0;
-
-            //
-            // Compute the size of the buffer
-            //
-            constexpr auto max_aligment_v = 16;
-            using max_align_byte = std::byte alignas(max_aligment_v);
-            m_FinalGeom.m_DataSize  = 0;
-            m_FinalGeom.m_Stream[0] = 0;
-            for (int i = 0; i < m_FinalGeom.m_nStreams; ++i)
-            {
-                if (i) m_FinalGeom.m_Stream[i] = m_FinalGeom.m_DataSize;
-                const auto Size = m_FinalGeom.getStreamSize(i);
-                m_FinalGeom.m_DataSize = xbits::Align(m_FinalGeom.m_DataSize + Size, max_aligment_v);
-            }
-
-            m_FinalGeom.m_pData = new max_align_byte[m_FinalGeom.m_DataSize];
-
-            //-----------------------------------------------------------------------------------
-            // Create the streams and copy data
-            //-----------------------------------------------------------------------------------
-            for( int i=0; i<m_FinalGeom.m_nStreamInfos; ++i )
-            {
-                const auto& StreamInfo = m_FinalGeom.m_StreamInfo[i];
-
-                switch( StreamInfo.m_ElementsType.m_Value )
-                {
-                //
-                // Indices
-                //
-                case xgeom::stream_info::element_def::index_mask_v: 
-                {
-                    if (StreamInfo.m_Format == xgeom::stream_info::format::UINT32_1D)
-                    {
-                        auto pIndexData = reinterpret_cast<std::uint32_t*>(m_FinalGeom.getStreamInfoData(i));
-                        for (auto i = 0u; i < Indices32.size(); ++i)
+                        std::vector<float> binormal_signs(input_sm.m_Vertex.size(), 1.0f);
+                        for (size_t i = 0; i < input_sm.m_Vertex.size(); ++i) 
                         {
-                            pIndexData[i] = Indices32[i];
-                        }
-                    }
-                    else
-                    {
-                        auto pIndexData = reinterpret_cast<std::uint16_t*>(m_FinalGeom.getStreamInfoData(i));
-                        for (auto i = 0u; i < Indices32.size(); ++i)
-                        {
-                            pIndexData[i] = std::uint16_t(Indices32[i]);
-                        }
-                    }
-                    break;
-                }
-                //
-                // Positions
-                //
-                case xgeom::stream_info::element_def::position_mask_v:
-                {
-                    assert(StreamInfo.getVectorElementSize() == 4);
-
-                    std::byte* pVertex = m_FinalGeom.getStreamInfoData(i);
-                    auto       Stride  = m_FinalGeom.getStreamInfoStride(i);
-                    for( auto i=0u; i< FinalVertex.size(); ++i )
-                    {
-                        *((xmath::fvec3d*)pVertex) =  FinalVertex[i].m_Position;
-                        pVertex += Stride;
-                    }
-
-                    break;
-                }
-
-                //
-                // BTN
-                //
-                case xgeom::stream_info::element_def::btn_mask_v:
-                {
-                    std::byte* pVertex = m_FinalGeom.getStreamInfoData(i);
-                    auto       Stride = m_FinalGeom.getStreamInfoStride(i);
-
-                    if( CompilerOption.m_Streams.m_bCompressBTN == false )
-                    {
-                        assert(StreamInfo.getVectorElementSize() == 4);
-                        for( auto i=0u; i< FinalVertex.size(); ++i )
-                        {
-                            std::memcpy(&pVertex[0 * sizeof(xmath::fvec3d)], &FinalVertex[i].m_Binormal, sizeof(xmath::fvec3d));
-                            std::memcpy(&pVertex[1 * sizeof(xmath::fvec3d)], &FinalVertex[i].m_Tangent,  sizeof(xmath::fvec3d));
-                            std::memcpy(&pVertex[2 * sizeof(xmath::fvec3d)], &FinalVertex[i].m_Normal,   sizeof(xmath::fvec3d));
-                            pVertex += Stride;
-                        }
-                    }
-                    else
-                    {
-                        assert(StreamInfo.getVectorElementSize() == 1);
-                        Stride -= 3*3;
-                        for( auto i=0u; i< FinalVertex.size(); ++i )
-                        {
-                            *pVertex = std::byte(FinalVertex[i].m_Binormal.m_X * (0xff >> 1)); pVertex++;
-                            *pVertex = std::byte(FinalVertex[i].m_Binormal.m_Y * (0xff >> 1)); pVertex++;
-                            *pVertex = std::byte(FinalVertex[i].m_Binormal.m_Z * (0xff >> 1)); pVertex++;
-
-                            *pVertex = std::byte(FinalVertex[i].m_Tangent.m_X * (0xff >> 1)); pVertex++;
-                            *pVertex = std::byte(FinalVertex[i].m_Tangent.m_Y * (0xff >> 1)); pVertex++;
-                            *pVertex = std::byte(FinalVertex[i].m_Tangent.m_Z * (0xff >> 1)); pVertex++;
-
-                            *pVertex = std::byte(FinalVertex[i].m_Normal.m_X * (0xff >> 1)); pVertex++;
-                            *pVertex = std::byte(FinalVertex[i].m_Normal.m_Y * (0xff >> 1)); pVertex++;
-                            *pVertex = std::byte(FinalVertex[i].m_Normal.m_Z * (0xff >> 1)); pVertex++;
-
-                            pVertex += Stride;
-                        }
-                    }
-            
-                    break;
-                }
-
-                //
-                // UVs
-                //
-                case xgeom::stream_info::element_def::uv_mask_v:
-                {
-                    assert(StreamInfo.getVectorElementSize() == 4);
-                    std::byte* pVertex = m_FinalGeom.getStreamInfoData(i);
-                    auto       Stride = m_FinalGeom.getStreamInfoStride(i);
-
-                    for( auto i = 0u; i < FinalVertex.size(); ++i )
-                    {
-                        for( int j = 0, k = 0; j < UVDimensionCount; ++j )
-                        {
-                            if (CompilerOption.m_Cleanup.m_bRemoveUVs[j]) continue;
-                            std::memcpy(&pVertex[k*sizeof(xmath::fvec2)], &FinalVertex[i].m_UVs[j], sizeof(xmath::fvec2));
-                            k++;
-                        }
-
-                        pVertex += Stride;
-                    }
-
-                    break;
-                }
-
-                //
-                // Colors
-                //
-                case xgeom::stream_info::element_def::color_mask_v:
-                {
-                    assert(StreamInfo.getVectorElementSize() == 1);
-                    std::byte* pVertex = m_FinalGeom.getStreamInfoData(i);
-                    auto       Stride = m_FinalGeom.getStreamInfoStride(i);
-
-                    for( auto i = 0u; i < FinalVertex.size(); ++i )
-                    {
-                        (*(xcolori*)pVertex) = FinalVertex[i].m_Color;
-                        pVertex += Stride;
-                    }
-
-                    break;
-                }
-
-                //
-                // Bone Weights
-                //
-                case xgeom::stream_info::element_def::bone_weight_mask_v:
-                {
-                    std::byte* pVertex = m_FinalGeom.getStreamInfoData(i);
-                    auto       Stride = m_FinalGeom.getStreamInfoStride(i);
-
-                    if( StreamInfo.getVectorElementSize() == 1 )
-                    {
-                        for (auto i = 0u; i < FinalVertex.size(); ++i)
-                        {
-                            for (int j = 0; j < StreamInfo.m_VectorCount; ++j)
+                            const vertex& v = input_sm.m_Vertex[i];
+                            if (input_sm.m_bHasBTN) 
                             {
-                                pVertex[j] = std::byte(FinalVertex[i].m_Weights[j].m_Weight * 0xff);
+                                xmath::fvec3 computed_binormal = xmath::fvec3::Cross(v.m_Normal, v.m_Tangent);
+                                float dot_val = xmath::fvec3::Dot(computed_binormal, v.m_Binormal);
+                                binormal_signs[i] = (dot_val >= 0.0f) ? 1.0f : -1.0f;
                             }
-
-                            pVertex += Stride;
                         }
+
+                        std::vector<int>        vert_pos_pal(input_sm.m_Vertex.size(), -1);
+                        std::vector<uint32_t>   all_local_verts(input_sm.m_Vertex.size());
+                        for (uint32_t i = 0; i < input_sm.m_Vertex.size(); ++i) all_local_verts[i] = i;
+                        RecursePosCluster(input_sm.m_Vertex, all_local_verts, max_extent, OutPosPalettes, vert_pos_pal);
+
+                        std::vector<int> vert_uv_pal(input_sm.m_Vertex.size(), -1);
+                        RecurseUVCluster(input_sm.m_Vertex, all_local_verts, max_extent, OutUVPalettes, vert_uv_pal);
+
+                        TriCluster initial;
+                        uint32_t num_tris = static_cast<uint32_t>(lod_indices.size() / 3);
+                        initial.tri_ids.resize(num_tris);
+                        for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
+
+                        size_t prev_num_clusters = OutClusters.size();
+                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, vert_pos_pal, vert_uv_pal, binormal_signs, OutPosPalettes, OutUVPalettes, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutAllIndices);
+
+                        out_sm.m_nCluster = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
+                        current_cluster_idx += out_sm.m_nCluster;
+                        OutSubmeshes.push_back(out_sm);
                     }
-                    else
-                    {
-                        assert(StreamInfo.getVectorElementSize() == 4);
-                        for( auto i = 0u; i < FinalVertex.size(); ++i )
-                        {
-                            for (int j = 0; j < StreamInfo.m_VectorCount; ++j)
-                            {
-                                ((float*)pVertex)[j] = FinalVertex[i].m_Weights[j].m_Weight;
-                            }
+                }
+            }
 
-                            pVertex += Stride;
-                        }
-                    }
+            result.m_pMesh          = new geom::mesh[OutMeshes.size()];
+            result.m_nMeshes        = static_cast<std::uint16_t>(OutMeshes.size());
+            std::copy(OutMeshes.begin(), OutMeshes.end(), result.m_pMesh);
 
-                    break;
-                } 
+            result.m_pLOD           = new geom::lod[OutLODs.size()];
+            result.m_nLODs          = static_cast<std::uint16_t>(OutLODs.size());
+            std::copy(OutLODs.begin(), OutLODs.end(), result.m_pLOD);
 
-                //
-                // Bone Indices
-                //
-                case xgeom::stream_info::element_def::bone_index_mask_v:
-                {
-                    std::byte* pVertex = m_FinalGeom.getStreamInfoData(i);
-                    auto       Stride = m_FinalGeom.getStreamInfoStride(i);
+            result.m_pSubMesh       = new geom::submesh[OutSubmeshes.size()];
+            result.m_nSubMeshs      = static_cast<std::uint16_t>(OutSubmeshes.size());
+            std::copy(OutSubmeshes.begin(), OutSubmeshes.end(), result.m_pSubMesh);
 
-                    if( StreamInfo.getVectorElementSize() == 1 )
-                    {
-                        for (auto i = 0u; i < FinalVertex.size(); ++i)
-                        {
-                            for (int j = 0; j < StreamInfo.m_VectorCount; ++j)
-                            {
-                                *pVertex = std::byte(FinalVertex[i].m_Weights[j].m_iBone);
-                            }
+            result.m_pCluster       = new geom::cluster[OutClusters.size()];
+            result.m_nClusters      = static_cast<std::uint16_t>(OutClusters.size());
+            std::copy(OutClusters.begin(), OutClusters.end(), result.m_pCluster);
 
-                            pVertex += Stride;
-                        }
-                    }
-                    else
-                    {
-                        assert(StreamInfo.getVectorElementSize() == 2);
-                        for( auto i = 0u; i < FinalVertex.size(); ++i )
-                        {
-                            for (int j = 0; j < StreamInfo.m_VectorCount; ++j)
-                            {
-                                ((std::uint16_t*)pVertex)[j] = FinalVertex[i].m_Weights[j].m_iBone;
-                            }
+            result.m_nDefaultMaterialInstances = 0;
+            result.m_pDefaultMaterialInstances = nullptr;
 
-                            pVertex += Stride;
-                        }
-                    }
+            result.m_BBox           = OutGlobalBBox.to_fbbox();
+            result.m_nPosPalette    = static_cast<std::uint8_t>(OutPosPalettes.size());
+            result.m_nUVPalette     = static_cast<std::uint8_t>(OutUVPalettes.size());
+            result.m_nVertices      = static_cast<std::uint32_t>(OutAllStaticVerts.size());
+            result.m_nIndices       = static_cast<std::uint32_t>(OutAllIndices.size());
 
-                    break;
-                } 
-
-                } // end case
-            }// end for loop
-
-            auto Transfer = []< typename T >( std::vector<T>& V )
+            // Compute aligned sizes for GPU data
+            auto align = [](size_t offset, size_t alignment) -> size_t
             {
-                auto Own = std::make_unique<T[]>(V.size());
-                for( auto i=0u; i<V.size(); ++i ) Own[i] = V[i];
-                return Own.release();
+                return (offset + alignment - 1) & ~(alignment - 1);
             };
 
-            //
-            // Set the rest of the pointers
-            //
-            m_FinalGeom.m_pLOD      = Transfer(FinalLod);
-            m_FinalGeom.m_pMesh     = Transfer(FinalMeshes);
-            m_FinalGeom.m_pSubMesh  = Transfer(FinalSubmeshes);
-            m_FinalGeom.m_pBone     = nullptr;
-            m_FinalGeom.m_pDList    = nullptr;
+            constexpr std::size_t vulkan_align      = 16;  // Min for Vulkan buffers/UBO
+            const     std::size_t PosPalSize        = OutPosPalettes.size()     * sizeof(geom::pos_palette_entry);
+            const     std::size_t UVPalSize         = OutUVPalettes.size()      * sizeof(geom::uv_palette_entry);
+            const     std::size_t VertexSize        = OutAllStaticVerts.size()  * sizeof(geom::vertex);
+            const     std::size_t ExtrasSize        = OutAllExtrasVerts.size()  * sizeof(geom::vertex_extras);
+            const     std::size_t IndicesSize       = OutAllIndices.size()      * sizeof(std::uint16_t);
+            std::size_t current_offset   = 0;
+
+            result.m_PosPalettesOffset  = current_offset;
+
+            current_offset              = align(current_offset + PosPalSize, vulkan_align);
+            result.m_UVPalettesOffset   = current_offset;
+
+            current_offset              = align(current_offset + UVPalSize, vulkan_align);
+            result.m_VertexOffset       = current_offset;
+
+            current_offset              = align(current_offset + VertexSize, vulkan_align);
+            result.m_VertexExtrasOffset = current_offset;
+
+            current_offset              = align(current_offset + ExtrasSize, vulkan_align);
+            result.m_IndicesOffset      = current_offset;
+
+            // Now we can do the full allocation for everything
+            current_offset              = align(current_offset + IndicesSize, vulkan_align);
+            result.m_DataSize           = current_offset;
+            result.m_pData              = new char[result.m_DataSize];
+
+            // Copy data into m_pData
+            std::memcpy(result.m_pData + result.m_PosPalettesOffset,    OutPosPalettes.data(),      PosPalSize);
+            std::memcpy(result.m_pData + result.m_UVPalettesOffset,     OutUVPalettes.data(),       UVPalSize);
+            std::memcpy(result.m_pData + result.m_VertexOffset,         OutAllStaticVerts.data(),   VertexSize);
+            std::memcpy(result.m_pData + result.m_VertexExtrasOffset,   OutAllExtrasVerts.data(),   ExtrasSize);
+            char* indices_ptr = result.m_pData + result.m_IndicesOffset;
+            for (size_t i = 0; i < OutAllIndices.size(); ++i) 
+            {
+                assert(OutAllIndices[i] < 0xffff);
+                reinterpret_cast<std::uint16_t*>(indices_ptr)[i] = static_cast<std::uint16_t>(OutAllIndices[i]);
+            }
         }
 
-        void Compile( const xgeom_rsc::descriptor& CompilerOption )
+        //--------------------------------------------------------------------------------------
+
+        void MergeMeshes()
         {
-            if (CompilerOption.m_Cleanup.m_bForceAddColorIfNone) m_RawGeom.ForceAddColorIfNone();
-            if (CompilerOption.m_Cleanup.m_bMergeMeshes) m_RawGeom.CollapseMeshes(CompilerOption.m_Cleanup.m_RenameMesh.c_str());
-            m_RawGeom.CleanMesh();
-            m_RawGeom.SortFacetsByMeshMaterialBone();
+            //
+            // Check if we actually have any work to do...
+            //
+            int iMergedMesh = -1;
+            for (auto E : m_Descriptor.m_MeshList)
+            {
+                if (E.m_bMerge == false)
+                {
+                    iMergedMesh = 0;
+                    break;
+                }
+            }
+
+            if (not m_Descriptor.m_MeshList.empty() && iMergedMesh == -1)
+            {
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("You have mark all meshes as NO MERGE, so I am unable to merge anything..."));
+                return;
+            }
+
+            std::vector<int> MeshesMerge;
+            std::vector<int> RemapMeshes;
+
+            // Allocate and clear the list
+            MeshesMerge.resize(m_RawGeom.m_Mesh.size());
+            RemapMeshes.resize(MeshesMerge.size());
+            for (auto& E : MeshesMerge) E = 1;
 
             //
-            // Convert to mesh
+            // fill the list for all the meshes that can not be merged
             //
-            m_FinalGeom.Reset();
-            ConvertToCompilerMesh(CompilerOption);
-            GenenateLODs(CompilerOption);
-            optimizeFacesAndVerts(CompilerOption);
-            GenerateFinalMesh(CompilerOption);
+            iMergedMesh = 0;
+            for (auto E : m_Descriptor.m_MeshList)
+            {
+                auto index = m_RawGeom.findMesh(E.m_OriginalName);
+                if (index == -1)
+                {
+                    LogMessage(xresource_pipeline::msg_type::WARNING, std::format("Mesh {} is not longer associated it will be marked for the merged", E.m_OriginalName));
+                    continue;
+                }
+
+                MeshesMerge[index] = E.m_bMerge?1:0;
+
+                if (MeshesMerge[index]==0) iMergedMesh++;   
+            }
+
+            //
+            // Create the remap table
+            //
+
+            // Find the first mesh that is going to be deleted
+            int iLastEmpty = 0;
+            for(auto& E : MeshesMerge)
+            {
+                const int index = static_cast<int>(&E - MeshesMerge.data());
+                if (E == 1) RemapMeshes[index] = iMergedMesh;
+                else
+                {
+                    RemapMeshes[index] = iLastEmpty;
+                    iLastEmpty++;
+                }
+            }
+
+            //
+            // Update the faces with the right index
+            //
+            for (auto& Facet : m_RawGeom.m_Facet)
+            {
+                Facet.m_iMesh = RemapMeshes[Facet.m_iMesh];
+            }
+
+            //
+            // Remove all meshes that have been merged
+            //
+            for (auto& E : m_RawGeom.m_Mesh)
+            {
+                const int index = static_cast<int>(&E - m_RawGeom.m_Mesh.data());
+
+                // If it is a deleted mesh we do not need to worry about it
+                if (RemapMeshes[index] == iMergedMesh)
+                    continue;
+
+                // Check if it's actually going to move or not...
+                if ( index != RemapMeshes[index] )
+                {
+                    m_RawGeom.m_Mesh[RemapMeshes[index]] = std::move(m_RawGeom.m_Mesh[index]);
+                }
+            }
+
+            //
+            // The new merge mesh
+            //
+            m_RawGeom.m_Mesh[iMergedMesh].m_Name    = "Merged Mesh";
+            m_RawGeom.m_Mesh[iMergedMesh].m_nBones  = 0;
+            m_RawGeom.m_Mesh.resize(iMergedMesh+1);
         }
+
+        //--------------------------------------------------------------------------------------
+
+        xerr Compile()
+        {
+            try
+            {
+                if (m_Descriptor.m_bMergeMeshes) 
+                {
+                    displayProgressBar("Merging Meshes", 1);
+                    MergeMeshes();
+                    displayProgressBar("Merging Meshes", 0);
+                }
+
+                displayProgressBar("Cleaning up Geom", 1);
+                m_RawGeom.CleanMesh();
+                m_RawGeom.SortFacetsByMeshMaterialBone();
+                displayProgressBar("Cleaning up Geom", 1);
+
+                //
+                // Convert to mesh
+                //
+                m_FinalGeom.Initialize();
+
+                displayProgressBar("Generating LODs", 1);
+                ConvertToCompilerMesh();
+                GenenateLODs();
+                displayProgressBar("Generating LODs", 0);
+
+                displayProgressBar("Optimizing", 0);
+                optimizeFacesAndVerts();
+                displayProgressBar("Optimizing", 1);
+
+                //
+                // Generate final mesh
+                //
+                displayProgressBar("Generating Final Mesh", 0);
+                // mm accuracy
+                ConvertToGeom(0.001f);
+                
+                displayProgressBar("Generating Final Mesh", 1);
+            }
+            catch (std::runtime_error Error )
+            {
+                LogMessage(xresource_pipeline::msg_type::ERROR, std::format("{}", Error.what()));
+                return xerr::create_f<state, "Exception thrown">();
+            }
+
+            return {};
+        }
+
+        //--------------------------------------------------------------------------------------
+
+        void ComputeDetailStructure()
+        {
+            // Collect all the meshes
+            m_Details.m_Meshes.resize(m_RawGeom.m_Mesh.size());
+            for ( auto& M : m_RawGeom.m_Mesh )
+            {
+                const auto  index   = static_cast<int>(&M - m_RawGeom.m_Mesh.data());
+                auto&       DM      = m_Details.m_Meshes[index];
+
+                DM.m_Name           = M.m_Name;
+                DM.m_NumFaces       = 0;
+                DM.m_NumUVs         = 0;
+                DM.m_NumColors      = 0;
+                DM.m_NumNormals     = 0;
+                DM.m_NumTangents    = 0;
+            }
+
+            std::vector<std::vector<int>> MeshMatUsage;
+
+            // prepare to count how many material per mesh we use
+            MeshMatUsage.resize(m_RawGeom.m_Mesh.size());
+            for (auto& M : m_RawGeom.m_Mesh)
+            {
+                const auto  index = static_cast<int>(&M - m_RawGeom.m_Mesh.data());
+                MeshMatUsage[index].resize(m_RawGeom.m_MaterialInstance.size());
+                for (auto& I : MeshMatUsage[index]) I = 0;
+            }
+
+            // Add all the faces
+            for( auto& F : m_RawGeom.m_Facet)
+            {
+                const auto  index = static_cast<int>(&F - m_RawGeom.m_Facet.data());
+                m_Details.m_Meshes[F.m_iMesh].m_NumFaces++;
+
+                for ( int i=0; i<F.m_nVertices; ++i)
+                {
+                    m_Details.m_Meshes[F.m_iMesh].m_NumColors   = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumColors,   m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nColors );
+                    m_Details.m_Meshes[F.m_iMesh].m_NumUVs      = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumUVs,      m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nUVs    );
+                    m_Details.m_Meshes[F.m_iMesh].m_NumNormals  = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumNormals,  m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nNormals);
+                    m_Details.m_Meshes[F.m_iMesh].m_NumTangents = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumTangents, m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nTangents);
+                }
+
+                MeshMatUsage[F.m_iMesh][F.m_iMaterialInstance]++;
+            }
+
+            // Set the material instance counts...
+            for ( auto& M : m_Details.m_Meshes )
+            {
+                const auto  index = static_cast<int>(&M - m_Details.m_Meshes.data());
+                M.m_NumMaterials = 0;
+                for ( auto& I : MeshMatUsage[index] ) M.m_NumMaterials += I?1:0;
+            }
+
+            // Find total faces
+            m_Details.m_NumFaces        = 0;
+            m_Details.m_NumMaterials    = static_cast<int>(m_RawGeom.m_MaterialInstance.size());
+            for (auto& M : m_Details.m_Meshes)
+            {
+                m_Details.m_NumFaces += M.m_NumFaces;
+            }
+        }
+
+        //--------------------------------------------------------------------------------------
 
         xerr onCompile(void) noexcept override
         {
-            xgeom_rsc::descriptor Descriptor;
-
             //
             // Read the descriptor file...
             //
+            displayProgressBar("Loading Descriptor", 0);
+            if (0)
             {
                 xproperty::settings::context    Context{};
                 auto                            DescriptorFileName = std::format(L"{}/{}/Descriptor.txt", m_ProjectPaths.m_Project, m_InputSrcDescriptorPath);
 
-                if ( auto Err = Descriptor.Serialize(true, DescriptorFileName, Context); Err)
+                if ( auto Err = m_Descriptor.Serialize(true, DescriptorFileName, Context); Err)
                     return Err;
             }
 
             //
             // Do a quick validation of the descriptor
             //
-            //if (auto Err = DoValidation(); Err)
-           //     return Err;
+            if (0)
+            {
+                std::vector<std::string> Errors;
+                m_Descriptor.Validate(Errors);
+                if (not Errors.empty())
+                {
+                    for( auto& E : Errors)
+                        LogMessage(xresource_pipeline::msg_type::ERROR, std::move(E) );
 
+                    return xerr::create_f<state, "Validation Errors">();
+                }
+            }
+            displayProgressBar("Loading Descriptor", 1);
+
+
+            m_Descriptor.m_ImportAsset = std::wstring(L"Assets\\materialpreview-frozen.fbx");
+            m_Descriptor.m_ImportAsset = std::wstring(L"Assets\\PuppyDog\\source\\Puppy Robot2.fbx");
+            m_Descriptor.m_bMergeMeshes = true;
 
             //
             // Load the source data
             //
-            LoadRaw(std::format(L"{}/{}", m_ProjectPaths.m_Project, Descriptor.m_Main.m_MeshAsset));
+            displayProgressBar("Loading Mesh", 0);
+            if ( auto Err = LoadRaw(std::format(L"{}/{}", m_ProjectPaths.m_Project, m_Descriptor.m_ImportAsset)); Err )
+                return Err;
+            displayProgressBar("Loading Mesh", 1);
+
+            //
+            // Fill the detail structure
+            //
+            ComputeDetailStructure();
 
             //
             // OK Time to compile
             //
-            Compile(Descriptor);
+            Compile();
 
             //
             // Export
@@ -945,10 +1017,10 @@ namespace xgeom_compiler
                 }
             }
             displayProgressBar("Serializing", 1);
-
             return {};
         }
 
+        //--------------------------------------------------------------------------------------
 
         void Serialize(const std::wstring_view FilePath)
         {
@@ -956,15 +1028,11 @@ namespace xgeom_compiler
             if( auto Err = Serializer.Save
                 ( FilePath
                 , m_FinalGeom
-                , m_OptimizationType == optimization_type::O0     ? xserializer::compression_level::FAST
-                    : m_OptimizationType == optimization_type::O1 ? xserializer::compression_level::MEDIUM
-                    : xserializer::compression_level::HIGH
+                , m_OptimizationType == optimization_type::O0     ? xserializer::compression_level::FAST : xserializer::compression_level::HIGH
                 ); Err )
             {
                 throw(std::runtime_error(std::string(Err.getMessage())));
             }
-                
-
         }
 
         meshopt_VertexCacheStatistics   m_VertCacheAMDStats;
@@ -973,9 +1041,12 @@ namespace xgeom_compiler
         meshopt_VertexCacheStatistics   m_VertCacheStats;
         meshopt_VertexFetchStatistics   m_VertFetchStats;
         meshopt_OverdrawStatistics      m_OverdrawStats;
-        xgeom                           m_FinalGeom;
+
+        xgeom_static::details           m_Details;
+        xgeom_static::descriptor        m_Descriptor;
+
+        xgeom_static::geom              m_FinalGeom;
         std::vector<mesh>               m_CompilerMesh;
-        xraw3d::anim                    m_RawAnim;
         xraw3d::geom                    m_RawGeom;
     };
 
