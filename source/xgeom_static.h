@@ -34,30 +34,6 @@ namespace xgeom_static
             std::uint16_t           m_iMaterial;        // Index of the Material that this SubMesh uses
         };
 
-        struct cluster
-        {
-            xmath::fbbox            m_BBox;             // Optional fine-grained CPU culling (e.g., per-cluster frustum/occlusion)
-            std::uint32_t           m_iIndex;           // Where the index starts
-            std::uint32_t           m_nIndices;         // number of
-            std::uint32_t           m_iVertex;          // Where the vertex starts
-            std::uint32_t           m_nVertices;        // number of
-        };
-
-        struct vertex
-        {
-            int16_t m_XPos, m_YPos, m_ZPos;
-            int16_t m_Extra;                            // Bit 0: binormal sign (0:+1, 1:-1)
-                                                        // bits 1-7: pos pal (0-127)
-                                                        // bits 8-15: uv pal (0-255)
-        };
-
-        struct vertex_extras
-        {
-            std::array<std::uint16_t,2>     m_UV;
-            std::array<std::int16_t, 2>     m_OctNormal;
-            std::array<std::int16_t, 2>     m_OctTangent;
-        };
-
         struct vec3
         {
             float m_X, m_Y, m_Z;
@@ -73,20 +49,32 @@ namespace xgeom_static
             float m_X, m_Y, m_Z, m_W;
         };
 
-        struct pos_palette_entry
+        struct cluster
         {
-            vec3 m_Scale;
-            float m_Pad0 = 0.0f;  // Padding for std140 alignment (vec3 -> 16B)
-            vec3 m_Offset;
-            float m_Pad1 = 0.0f;  // Padding for std140 alignment
+            vec4                    m_PosScaleAndUScale;        // XYZ scale for the cluster, W = U Scale
+            vec4                    m_PosTrasnlationAndVScale;  // XYZ scale for the cluster, W = V Scale
+            vec2                    m_UVTranslation;            // UV Translation.            
+            xmath::fbbox            m_BBox;                     // Optional fine-grained CPU culling (e.g., per-cluster frustum/occlusion)
+            std::uint32_t           m_iIndex;                   // Where the index starts
+            std::uint32_t           m_nIndices;                 // number of
+            std::uint32_t           m_iVertex;                  // Where the vertex starts
+            std::uint32_t           m_nVertices;                // number of
         };
 
-        struct uv_palette_entry
+        struct vertex
         {
-            vec4 m_ScaleAndOffset; // (xy scale, zw offsets)
+            int16_t m_XPos, m_YPos, m_ZPos;
+            int16_t m_Extra;                            // Bit 0: binormal sign (0:+1, 1:-1)
         };
 
-        using runtime_allocation = std::array<std::size_t, 5*3>;
+        struct vertex_extras
+        {
+            std::array<std::uint16_t,2>     m_UV;
+            std::array<std::uint8_t, 2>     m_OctNormal;
+            std::array<std::uint8_t, 2>     m_OctTangent;
+        };
+
+        using runtime_allocation = std::array<std::size_t, 3*2>;
 
         //-------------------------------------------------------------------------
 
@@ -100,15 +88,13 @@ namespace xgeom_static
         inline std::span<lod>                           getLODs                     (void)                              const   noexcept { return { m_pLOD, m_nLODs }; }
         inline std::span<submesh>                       getSubmeshes                (void)                              const   noexcept { return { m_pSubMesh, m_nSubMeshs }; }
         inline std::span<cluster>                       getClusters                 (void)                              const   noexcept { return { m_pCluster, m_nClusters }; }
-        inline std::span<pos_palette_entry>             getPosPalettes              (void)                              const   noexcept { return { reinterpret_cast<pos_palette_entry*>(m_pData + m_PosPalettesOffset), m_nPosPalette }; }
-        inline std::span<uv_palette_entry>              getUVPalettes               (void)                              const   noexcept { return { reinterpret_cast<uv_palette_entry*>(m_pData + m_UVPalettesOffset), m_nUVPalette }; }
         inline std::span<vertex>                        getVertices                 (void)                              const   noexcept { return { reinterpret_cast<vertex*>(m_pData + m_VertexOffset), m_nVertices }; }
         inline std::span<vertex_extras>                 getVertexExtras             (void)                              const   noexcept { return { reinterpret_cast<vertex_extras*>(m_pData + m_VertexExtrasOffset), m_nVertices }; }
         inline std::span<std::uint16_t>                 getIndices                  (void)                              const   noexcept { return { reinterpret_cast<std::uint16_t*>(m_pData + m_IndicesOffset), m_nIndices }; }
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
 
         xmath::fbbox                    m_BBox;
-        char*                           m_pData;  // Contiguous buffer for GPU data (palettes, vertices, extras, indices)
+        char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
         mesh*                           m_pMesh;  // Separate allocations for CPU-persistent data
         lod*                            m_pLOD;
         submesh*                        m_pSubMesh;
@@ -116,8 +102,6 @@ namespace xgeom_static
         xrsc::material_instance_ref*    m_pDefaultMaterialInstances;
         runtime_allocation              m_RunTimeSpace;
         std::size_t                     m_DataSize;
-        std::size_t                     m_PosPalettesOffset;
-        std::size_t                     m_UVPalettesOffset;
         std::size_t                     m_VertexOffset;
         std::size_t                     m_VertexExtrasOffset;
         std::size_t                     m_IndicesOffset;
@@ -128,8 +112,6 @@ namespace xgeom_static
         std::uint32_t                   m_nIndices;
         std::uint32_t                   m_nVertices;
         std::uint16_t                   m_nDefaultMaterialInstances;
-        std::uint8_t                    m_nPosPalette;
-        std::uint8_t                    m_nUVPalette;
     };
 
     //-------------------------------------------------------------------------
@@ -232,6 +214,19 @@ namespace xserializer::io_functions
     {
         xerr Err;
         false
+            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_X))
+            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_Y))
+            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_Z))
+            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_W))
+
+            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_X))
+            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_Y))
+            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_Z))
+            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_W))
+
+            || (Err = Stream.Serialize(Cluster.m_UVTranslation.m_X))
+            || (Err = Stream.Serialize(Cluster.m_UVTranslation.m_Y))
+
             || (Err = Stream.Serialize(Cluster.m_nVertices))
             || (Err = Stream.Serialize(Cluster.m_nIndices))
             || (Err = Stream.Serialize(Cluster.m_iIndex))
@@ -278,13 +273,9 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_BBox.m_Max.m_X))
             || (Err = Stream.Serialize(Geom.m_BBox.m_Max.m_Y))
             || (Err = Stream.Serialize(Geom.m_BBox.m_Max.m_Z))
-            || (Err = Stream.Serialize(Geom.m_PosPalettesOffset))
-            || (Err = Stream.Serialize(Geom.m_UVPalettesOffset))
             || (Err = Stream.Serialize(Geom.m_VertexOffset))
             || (Err = Stream.Serialize(Geom.m_VertexExtrasOffset))
             || (Err = Stream.Serialize(Geom.m_IndicesOffset))
-            || (Err = Stream.Serialize(Geom.m_nPosPalette))
-            || (Err = Stream.Serialize(Geom.m_nUVPalette))
             || (Err = Stream.Serialize(Geom.m_nVertices))
             || (Err = Stream.Serialize(Geom.m_nIndices))
             ;

@@ -19,16 +19,16 @@ int main( int argc, const char* argv[] )
     //
     // This is just for debugging
     //
-    if constexpr (!false)
+    if constexpr (false)
     {
         static const char* pDebugArgs[] =
-        { "TextureCompiler"
+        { "StaticGeomCompiles..."
         , "-PROJECT"
         , "D:\\LIONant\\xGPU\\example.lionprj"
         , "-DEBUG"
         , "D1"
         , "-DESCRIPTOR"
-        , "Descriptors\\GeomStatic\\05\\00\\B2295861246D0005.desc"
+        , "Descriptors\\GeomStatic\\03\\40\\949478640AFE4003.desc"
         , "-OUTPUT"
         , "D:\\LIONant\\xGPU\\example.lionprj\\Cache\\Resources\\Platforms\\WINDOWS"
         };

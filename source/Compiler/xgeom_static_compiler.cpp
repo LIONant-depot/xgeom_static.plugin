@@ -14,6 +14,7 @@
 #include "../xgeom_static_details.h"
 
 #include "dependencies/xproperty/source/xcore/my_properties.cpp"
+#include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
 
 namespace xgeom_static_compiler
 {
@@ -40,8 +41,8 @@ namespace xgeom_static_compiler
         struct sub_mesh
         {
             std::vector<vertex>             m_Vertex;
-            std::vector<std::uint32_t>      m_Indices;
-            std::vector<lod>                m_LODs;
+            std::vector<std::uint32_t>      m_Indices;                      // Actual LOD 0 (Original mesh)
+            std::vector<lod>                m_LODs;                         // This is LOD 1..n (New computed LODS)
             std::uint32_t                   m_iMaterial;
             int                             m_nWeights      { 0 };
             int                             m_nUVs          { 0 };
@@ -236,12 +237,16 @@ namespace xgeom_static_compiler
             }
         }
 
+
+
+
+
+#if 0
         //--------------------------------------------------------------------------------------
 
-        // Helpers
         static xmath::fvec2 oct_wrap(xmath::fvec2 v) noexcept
         {
-            return (xmath::fvec2(1.0f) - xmath::fvec2(v.m_Y, v.m_X).Abs()) * (v.Step({0}) * 2.0f - 1.0f);
+            return (xmath::fvec2(1.0f) - xmath::fvec2(v.m_Y, v.m_X).Abs()) * (v.Step({ 0 }) * 2.0f - 1.0f);
         }
 
         //--------------------------------------------------------------------------------------
@@ -260,15 +265,13 @@ namespace xgeom_static_compiler
         {
             xmath::fvec3 m_MinPos = xmath::fvec3(std::numeric_limits<float>::max());
             xmath::fvec3 m_MaxPos = xmath::fvec3(std::numeric_limits<float>::lowest());
-
             void Update(const xmath::fvec3& p) noexcept
             {
                 m_MinPos = m_MinPos.Min(p);
                 m_MaxPos = m_MaxPos.Max(p);
             }
-
             xmath::fbbox to_fbbox() const
-            {  
+            {
                 xmath::fbbox bb;
                 bb.m_Min = m_MinPos;
                 bb.m_Max = m_MaxPos;
@@ -282,7 +285,6 @@ namespace xgeom_static_compiler
         {
             xmath::fvec2 m_MinUV = xmath::fvec2(std::numeric_limits<float>::max());
             xmath::fvec2 m_MaxUV = xmath::fvec2(std::numeric_limits<float>::lowest());
-
             void Update(const xmath::fvec2& uv)
             {
                 m_MinUV = m_MinUV.Min(uv);
@@ -291,258 +293,238 @@ namespace xgeom_static_compiler
         };
 
         //--------------------------------------------------------------------------------------
-
         // Cluster for recursive splitting (triangle ids)
+
         struct TriCluster
         {
             std::vector<uint32_t> tri_ids;
         };
 
-        // Vertex group for palette clustering
-        static void RecursePosCluster
-        ( const std::vector<vertex>&                    Verts
-        ,       std::vector<uint32_t>                   Group
-        , const float                                   MaxExtent
-        ,       std::vector<geom::pos_palette_entry>&   PosPalettes
-        ,       std::vector<int>&                       VertPal
-        )
-        {
-            if (Group.empty()) return;
-
-            BBox3 bb;
-            for (uint32_t vi : Group) bb.Update(Verts[vi].m_Position);
-
-            xmath::fvec3 extent = bb.m_MaxPos - bb.m_MinPos;
-            float max_e = xmath::Max(xmath::Max(extent.m_X, extent.m_Y), extent.m_Z);
-
-            if (max_e <= MaxExtent) 
-            {
-                xmath::fvec3 center = (bb.m_MinPos + bb.m_MaxPos) * 0.5f;
-                xmath::fvec3 scale  = xmath::fvec3::Max((bb.m_MaxPos - bb.m_MinPos) * 0.5f, xmath::fvec3(1e-6f));
-
-                int pal_id = static_cast<int>(PosPalettes.size());
-                if (pal_id > 127) 
-                {
-                    throw std::runtime_error("Too many position palettes (max 128).");
-                }
-
-                geom::pos_palette_entry entry;
-                entry.m_Scale.m_X  = scale.m_X;  entry.m_Scale.m_Y  = scale.m_Y;  entry.m_Scale.m_Z  = scale.m_Z;
-                entry.m_Offset.m_X = center.m_X; entry.m_Offset.m_Y = center.m_Y; entry.m_Offset.m_Z = center.m_Z;
-                PosPalettes.push_back(entry);
-
-                for (uint32_t vi : Group) VertPal[vi] = pal_id;
-            }
-            else 
-            {
-                int axis = 0;
-                if (extent[1] > extent[axis]) axis = 1;
-                if (extent[2] > extent[axis]) axis = 2;
-
-                std::sort(Group.begin(), Group.end(), [&](std::uint32_t a, std::uint32_t b)
-                {
-                    return Verts[a].m_Position[axis] < Verts[b].m_Position[axis];
-                });
-
-                std::size_t half = Group.size() / 2;
-                std::vector<std::uint32_t> g1(Group.begin(), Group.begin() + half);
-                std::vector<std::uint32_t> g2(Group.begin() + half, Group.end());
-
-                RecursePosCluster(Verts, g1, MaxExtent, PosPalettes, VertPal);
-                RecursePosCluster(Verts, g2, MaxExtent, PosPalettes, VertPal);
-            }
-        }
-
         //--------------------------------------------------------------------------------------
 
-        static void RecurseUVCluster
-        ( const std::vector<vertex>&                 Verts
-        ,       std::vector<uint32_t>                Group
-        , const float                                MaxExtent
-        ,       std::vector<geom::uv_palette_entry>& UVPalettes
-        ,       std::vector<int>&                    VertPal
-        )
-        {
-            if (Group.empty()) return;
-
-            BBox2 bb;
-            for (uint32_t vi : Group) bb.Update(Verts[vi].m_UVs[0]);  // Use first UV
-
-            xmath::fvec2 extent = bb.m_MaxUV - bb.m_MinUV;
-            float max_e = xmath::Max(extent.m_X, extent.m_Y);
-
-            if (max_e <= MaxExtent) 
-            {
-                xmath::fvec2 uv_scale = xmath::fvec2::Max(bb.m_MaxUV - bb.m_MinUV, xmath::fvec2(1e-6f));
-
-                int pal_id = static_cast<int>(UVPalettes.size());
-                if (pal_id > 255) 
-                {
-                    throw std::runtime_error("Too many UV palettes (max 256).");
-                }
-
-                geom::uv_palette_entry entry;
-                entry.m_ScaleAndOffset.m_X  = uv_scale.m_X;     entry.m_ScaleAndOffset.m_Y  = uv_scale.m_Y;
-                entry.m_ScaleAndOffset.m_Z  = bb.m_MinUV.m_X;   entry.m_ScaleAndOffset.m_W = bb.m_MinUV.m_Y;
-                UVPalettes.push_back(entry);
-
-                for (uint32_t vi : Group) VertPal[vi] = pal_id;
-            }
-            else 
-            {
-                int axis = (extent.m_X > extent.m_Y) ? 0 : 1;
-
-                std::sort(Group.begin(), Group.end(), [&](std::uint32_t a, std::uint32_t b)
-                {
-                    return Verts[a].m_UVs[0][axis] < Verts[b].m_UVs[0][axis];
-                });
-
-                std::size_t half = Group.size() / 2;
-                std::vector<std::uint32_t> g1(Group.begin(), Group.begin() + half);
-                std::vector<std::uint32_t> g2(Group.begin() + half, Group.end());
-
-                RecurseUVCluster(Verts, g1, MaxExtent, UVPalettes, VertPal);
-                RecurseUVCluster(Verts, g2, MaxExtent, UVPalettes, VertPal);
-            }
-        }
-
-        //--------------------------------------------------------------------------------------
-
-        // Split into clusters (GPU chunks)
         static void RecurseClusterSplit
-        ( const std::vector<vertex>&                    InputVerts
-        , const std::vector<uint32_t>&                  InputIndices
-        , const TriCluster&                             c
-        , uint32_t                                      MaxVerts
-        , const std::vector<int>&                       VertPosPal
-        , const std::vector<int>&                       VertUVPal
-        , const std::vector<float>&                     BinormalSigns
-        , const std::vector<geom::pos_palette_entry>&   PosPalettes
-        , const std::vector<geom::uv_palette_entry>&    UVPalettes
-        , std::vector<geom::cluster>&                   OutputClusters
-        , std::vector<geom::vertex>&                    AllStaticVerts
-        , std::vector<geom::vertex_extras>&             AllExtrasVerts
-        , std::vector<uint32_t>&                        AllIndices
+        ( const std::vector<vertex>&        InputVerts
+        , const std::vector<uint32_t>&      InputIndices
+        , const TriCluster&                 c
+        , uint32_t                          MaxVerts
+        , const float                       MaxExtent
+        , const std::vector<float>&         BinormalSigns
+        , std::vector<geom::cluster>&       OutputClusters
+        , std::vector<geom::vertex>&        AllStaticVerts
+        , std::vector<geom::vertex_extras>& AllExtrasVerts
+        , std::vector<uint32_t>&            AllIndices
         )
         {
             if (c.tri_ids.empty()) return;
+            BBox3 bb_pos;
+            BBox2 bb_uv;
 
-            std::unordered_set<uint32_t> used_verts;
-            for (uint32_t ti : c.tri_ids) 
+            for (uint32_t ti : c.tri_ids)
             {
-                for (int j = 0; j < 3; ++j) 
+                for (int j = 0; j < 3; ++j)
                 {
-                    used_verts.insert(InputIndices[ti * 3 + j]);
+                    uint32_t vi = InputIndices[ti * 3 + j];
+                    bb_pos.Update(InputVerts[vi].m_Position);
+                    bb_uv.Update(InputVerts[vi].m_UVs[0]);
                 }
             }
 
-            if (used_verts.size() <= MaxVerts) 
+            xmath::fvec3    extent_pos      = bb_pos.m_MaxPos - bb_pos.m_MinPos;
+            xmath::fvec2    extent_uv       = bb_uv.m_MaxUV - bb_uv.m_MinUV;
+            float           max_e_pos       = std::max({ extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z });
+            float           max_e_uv        = std::max(extent_uv.m_X, extent_uv.m_Y);
+            bool            small_extent    = (max_e_pos <= MaxExtent && max_e_uv <= MaxExtent);
+
+            std::unordered_set<uint32_t> used_verts;
+            if (small_extent)
+            {
+                for (uint32_t ti : c.tri_ids)
+                {
+                    for (int j = 0; j < 3; ++j)
+                    {
+                        used_verts.insert(InputIndices[ti * 3 + j]);
+                    }
+                }
+            }
+
+            if (small_extent && used_verts.size() <= MaxVerts)
             {
                 // Remap verts locally
                 std::vector<uint32_t> new_vert_ids(used_verts.begin(), used_verts.end());
                 std::sort(new_vert_ids.begin(), new_vert_ids.end());
-                std::unordered_map<uint32_t, uint32_t> old_to_new;
+                std::unordered_map<uint32_t, uint32_t> old_to_new = {};
                 uint32_t new_id = 0;
-                for (uint32_t ov : new_vert_ids) 
+                for (uint32_t ov : new_vert_ids)
                 {
                     old_to_new[ov] = new_id++;
                 }
 
-                // Compute cluster bbox
-                BBox3 cluster_bb;
-                for (uint32_t ov : new_vert_ids) 
+                // Use precomputed bboxes
+                xmath::fvec3 pos_min    = bb_pos.m_MinPos;
+                xmath::fvec3 pos_max    = bb_pos.m_MaxPos;
+                xmath::fvec3 pos_center = (pos_min + pos_max) * 0.5f;
+                xmath::fvec3 pos_scale  = xmath::fvec3::Max((pos_max - pos_min) * 0.5f, xmath::fvec3(1e-6f));
+                xmath::fvec2 uv_min     = bb_uv.m_MinUV;
+                xmath::fvec2 uv_max     = bb_uv.m_MaxUV;
+                xmath::fvec2 uv_scale   = xmath::fvec2::Max(uv_max - uv_min, xmath::fvec2(1e-6f));
+
+                // Build local indices
+                std::vector<unsigned int> local_indices;
+                local_indices.reserve(c.tri_ids.size() * 3);
+                for (uint32_t ti : c.tri_ids)
                 {
-                    cluster_bb.Update(InputVerts[ov].m_Position);
+                    for (int j = 0; j < 3; ++j)
+                    {
+                        uint32_t ov = InputIndices[ti * 3 + j];
+                        local_indices.push_back(old_to_new[ov]);
+                    }
                 }
 
-                // Append verts to global
-                uint32_t cluster_vert_start = static_cast<uint32_t>(AllStaticVerts.size());
-                AllStaticVerts.resize(AllStaticVerts.size() + new_vert_ids.size());
-                AllExtrasVerts.resize(AllExtrasVerts.size() + new_vert_ids.size());
-                for (uint32_t i = 0; i < new_vert_ids.size(); ++i) 
+                // Optimize vertex cache
+                meshopt_optimizeVertexCache(local_indices.data(), local_indices.data(), local_indices.size(), static_cast<unsigned int>(new_vert_ids.size()));
+
+                // Prepare positions for overdraw optimization
+                std::vector<float> local_positions(new_vert_ids.size() * 3);
+                for (uint32_t i = 0; i < new_vert_ids.size(); ++i)
                 {
-                    uint32_t        ov          = new_vert_ids[i];
+                    const auto& pos = InputVerts[new_vert_ids[i]].m_Position;
+                    local_positions[i * 3 + 0] = pos.m_X;
+                    local_positions[i * 3 + 1] = pos.m_Y;
+                    local_positions[i * 3 + 2] = pos.m_Z;
+                }
+
+                // Optimize overdraw
+                meshopt_optimizeOverdraw(local_indices.data(), local_indices.data(), local_indices.size(), local_positions.data(), static_cast<unsigned int>(new_vert_ids.size()), sizeof(float) * 3, 1.05f);
+
+                // Generate fetch remap
+                std::vector<unsigned int> fetch_remap(new_vert_ids.size());
+                meshopt_optimizeVertexFetchRemap(fetch_remap.data(), local_indices.data(), local_indices.size(), static_cast<unsigned int>(new_vert_ids.size()));
+
+                // Pack original compressed vertices and extras
+                std::vector<geom::vertex>           original_static(new_vert_ids.size());
+                std::vector<geom::vertex_extras>    original_extras(new_vert_ids.size());
+                for (uint32_t i = 0; i < new_vert_ids.size(); ++i)
+                {
+                    const uint32_t  ov          = new_vert_ids[i];
                     const vertex&   v           = InputVerts[ov];
-                    int             pos_pal_id  = VertPosPal[ov];
-                    int             uv_pal_id   = VertUVPal[ov];
-                    float           sign_val    = BinormalSigns[ov];
-                    int             sign_bit    = (sign_val < 0.0f ? 1 : 0);
+                    const float     sign_val    = BinormalSigns[ov];
+                    const int       sign_bit    = (sign_val < 0.0f ? 1 : 0);
 
                     // Pos compression
-                    const auto&     pos_entry   = PosPalettes[pos_pal_id];
-                    const auto      center      = xmath::fvec3(pos_entry.m_Offset.m_X, pos_entry.m_Offset.m_Y, pos_entry.m_Offset.m_Z);
-                    const auto      scale       = xmath::fvec3(pos_entry.m_Scale.m_X,  pos_entry.m_Scale.m_Y,  pos_entry.m_Scale.m_Z);
-                    const float     nx          = ((v.m_Position.m_X - center.m_X) / scale.m_X + 1.0f) * 32767.5f - 32768.0f;
-                    const float     ny          = ((v.m_Position.m_Y - center.m_Y) / scale.m_Y + 1.0f) * 32767.5f - 32768.0f;
-                    const float     nz          = ((v.m_Position.m_Z - center.m_Z) / scale.m_Z + 1.0f) * 32767.5f - 32768.0f;
-                    geom::vertex&   sv          = AllStaticVerts[cluster_vert_start + i];
+                    const auto pos = ((v.m_Position - pos_center) / pos_scale + 1.0f) * 32767.5f - 32768.0f;
+                    original_static[i].m_XPos   = static_cast<int16_t>(std::round(pos.m_X));
+                    original_static[i].m_YPos   = static_cast<int16_t>(std::round(pos.m_Y));
+                    original_static[i].m_ZPos   = static_cast<int16_t>(std::round(pos.m_Z));
+                    original_static[i].m_Extra  = sign_bit | (0 << 1) | (0 << 8);
 
-                    sv.m_XPos   = static_cast<int16_t>(std::round(nx));
-                    sv.m_YPos   = static_cast<int16_t>(std::round(ny));
-                    sv.m_ZPos   = static_cast<int16_t>(std::round(nz));
-                    sv.m_Extra  = sign_bit | (pos_pal_id << 1) | (uv_pal_id << 8);
-
-                    // UV (first only)
-                    const auto&             uv_entry    = UVPalettes[uv_pal_id];
-                    const auto              uv_min      = xmath::fvec2(uv_entry.m_ScaleAndOffset.m_Z, uv_entry.m_ScaleAndOffset.m_W);
-                    const auto              uv_scale    = xmath::fvec2(uv_entry.m_ScaleAndOffset.m_X, uv_entry.m_ScaleAndOffset.m_Y);
-                    const auto              norm_uv     = (v.m_UVs[0] - uv_min) / uv_scale;
-                    geom::vertex_extras&    ev          = AllExtrasVerts[cluster_vert_start + i];
-
-                    ev.m_UV[0] = static_cast<uint16_t>(std::round(norm_uv.m_X * 65535.0f));
-                    ev.m_UV[1] = static_cast<uint16_t>(std::round(norm_uv.m_Y * 65535.0f));
+                    // UV
+                    const auto norm_uv = (v.m_UVs[0] - uv_min) / uv_scale;
+                    original_extras[i].m_UV[0] = static_cast<uint16_t>(std::round(norm_uv.m_X * 65535.0f));
+                    original_extras[i].m_UV[1] = static_cast<uint16_t>(std::round(norm_uv.m_Y * 65535.0f));
 
                     // Oct normal/tangent
                     const auto oct_n = oct_encode(v.m_Normal.NormalizeSafeCopy());
-                    ev.m_OctNormal[0] = static_cast<int16_t>(std::round(oct_n.m_X * 32767.0f));
-                    ev.m_OctNormal[1] = static_cast<int16_t>(std::round(oct_n.m_Y * 32767.0f));
+                    original_extras[i].m_OctNormal[0] = static_cast<int16_t>(std::round(oct_n.m_X * 32767.0f));
+                    original_extras[i].m_OctNormal[1] = static_cast<int16_t>(std::round(oct_n.m_Y * 32767.0f));
 
                     const auto oct_t = oct_encode(v.m_Tangent.NormalizeSafeCopy());
-                    ev.m_OctTangent[0] = static_cast<int16_t>(std::round(oct_t.m_X * 32767.0f));
-                    ev.m_OctTangent[1] = static_cast<int16_t>(std::round(oct_t.m_Y * 32767.0f));
+                    original_extras[i].m_OctTangent[0] = static_cast<int16_t>(std::round(oct_t.m_X * 32767.0f));
+                    original_extras[i].m_OctTangent[1] = static_cast<int16_t>(std::round(oct_t.m_Y * 32767.0f));
                 }
 
-                // Append indices to global (remapped)
+                // Remap vertices and extras
+                std::vector<geom::vertex> remapped_static(new_vert_ids.size());
+                meshopt_remapVertexBuffer(remapped_static.data(), original_static.data(), new_vert_ids.size(), sizeof(geom::vertex), fetch_remap.data());
+
+                std::vector<geom::vertex_extras> remapped_extras(new_vert_ids.size());
+                meshopt_remapVertexBuffer(remapped_extras.data(), original_extras.data(), new_vert_ids.size(), sizeof(geom::vertex_extras), fetch_remap.data());
+
+                // Remap indices
+                meshopt_remapIndexBuffer(local_indices.data(), local_indices.data(), local_indices.size(), fetch_remap.data());
+
+                // Append verts to global
+                uint32_t cluster_vert_start = static_cast<uint32_t>(AllStaticVerts.size());
+                AllStaticVerts.insert(AllStaticVerts.end(), remapped_static.begin(), remapped_static.end());
+                AllExtrasVerts.insert(AllExtrasVerts.end(), remapped_extras.begin(), remapped_extras.end());
+
+                // Append indices to global
                 uint32_t cluster_index_start = static_cast<uint32_t>(AllIndices.size());
-                for (uint32_t ti : c.tri_ids) 
+                for (auto idx : local_indices)
                 {
-                    for (int j = 0; j < 3; ++j) 
-                    {
-                        uint32_t ov = InputIndices[ti * 3 + j];
-                        AllIndices.push_back(old_to_new[ov]);
-                    }
+                    AllIndices.push_back(idx);
                 }
+
+                // Create cluster
+                geom::cluster cl;
+                cl.m_BBox                           = bb_pos.to_fbbox();
+                cl.m_PosScaleAndUScale.m_X          = pos_scale.m_X;
+                cl.m_PosScaleAndUScale.m_Y          = pos_scale.m_Y;
+                cl.m_PosScaleAndUScale.m_Z          = pos_scale.m_Z;
+                cl.m_PosScaleAndUScale.m_W          = uv_scale.m_X;
+                cl.m_PosTrasnlationAndVScale.m_X    = pos_center.m_X;
+                cl.m_PosTrasnlationAndVScale.m_Y    = pos_center.m_Y;
+                cl.m_PosTrasnlationAndVScale.m_Z    = pos_center.m_Z;
+                cl.m_PosTrasnlationAndVScale.m_W    = uv_scale.m_Y;
+                cl.m_UVTranslation.m_X              = uv_min.m_X;
+                cl.m_UVTranslation.m_Y              = uv_min.m_Y;
+                cl.m_iIndex                         = cluster_index_start;
+                cl.m_nIndices                       = static_cast<uint32_t>(c.tri_ids.size() * 3);
+                cl.m_iVertex                        = cluster_vert_start;
+                cl.m_nVertices                      = static_cast<uint32_t>(new_vert_ids.size());
+                OutputClusters.push_back(cl);
             }
             else
             {
-                BBox3 bb;
-                for (uint32_t ti : c.tri_ids) 
+                // Choose split axis based on max extent
+                float   maxes[5]    = { extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z, extent_uv.m_X, extent_uv.m_Y };
+                int     axis        = 0;
+                float   max_val     = maxes[0];
+                for (int i = 1; i < 5; ++i)
                 {
-                    for (int j = 0; j < 3; ++j) 
+                    if (maxes[i] > max_val)
                     {
-                        uint32_t vi = InputIndices[ti * 3 + j];
-                        bb.Update(InputVerts[vi].m_Position);
+                        max_val = maxes[i];
+                        axis = i;
                     }
                 }
-                xmath::fvec3    extent  = bb.m_MaxPos - bb.m_MinPos;
-                int             axis    = 0;
-                float           max_e   = extent[0];
-                if (extent[1] > max_e) { max_e = extent[1]; axis = 1; }
-                if (extent[2] > max_e) { max_e = extent[2]; axis = 2; }
-                float split_pos = (bb.m_MinPos[axis] + bb.m_MaxPos[axis]) * 0.5f;
 
-                TriCluster c1, c2;
-                for (uint32_t ti : c.tri_ids) 
+                float   split_pos;
+                bool    is_pos_axis = (axis < 3);
+                int     sub_axis    = is_pos_axis ? axis : (axis - 3);
+                if (is_pos_axis)
                 {
-                    xmath::fvec3 cent = (InputVerts[InputIndices[ti * 3 + 0]].m_Position +
-                                         InputVerts[InputIndices[ti * 3 + 1]].m_Position +
-                                         InputVerts[InputIndices[ti * 3 + 2]].m_Position) / 3.0f;
-                    if (cent[axis] < split_pos) c1.tri_ids.push_back(ti);
-                    else                        c2.tri_ids.push_back(ti);
+                    split_pos = (bb_pos.m_MinPos[sub_axis] + bb_pos.m_MaxPos[sub_axis]) * 0.5f;
+                }
+                else
+                {
+                    split_pos = (bb_uv.m_MinUV[sub_axis] + bb_uv.m_MaxUV[sub_axis]) * 0.5f;
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, VertPosPal, VertUVPal, BinormalSigns, PosPalettes, UVPalettes, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, VertPosPal, VertUVPal, BinormalSigns, PosPalettes, UVPalettes, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
+                TriCluster c1, c2;
+                for (uint32_t ti : c.tri_ids)
+                {
+                    uint32_t i0 = InputIndices[ti * 3 + 0];
+                    uint32_t i1 = InputIndices[ti * 3 + 1];
+                    uint32_t i2 = InputIndices[ti * 3 + 2];
+                    float   cent;
+
+                    if (is_pos_axis)
+                    {
+                        xmath::fvec3 cent_pos = (InputVerts[i0].m_Position + InputVerts[i1].m_Position + InputVerts[i2].m_Position) / 3.0f;
+                        cent = cent_pos[sub_axis];
+                    }
+                    else
+                    {
+                        xmath::fvec2 cent_uv = (InputVerts[i0].m_UVs[0] + InputVerts[i1].m_UVs[0] + InputVerts[i2].m_UVs[0]) / 3.0f;
+                        cent = cent_uv[sub_axis];
+                    }
+
+                    if (cent < split_pos)   c1.tri_ids.push_back(ti);
+                    else                    c2.tri_ids.push_back(ti);
+                }
+
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
             }
         }
 
@@ -550,51 +532,56 @@ namespace xgeom_static_compiler
 
         void ConvertToGeom(float target_precision)
         {
-            const std::vector<mesh>& compiler_meshes = m_CompilerMesh;
-            geom& result = m_FinalGeom;
+            const std::vector<mesh>&            compiler_meshes = m_CompilerMesh;
+            geom&                               result          = m_FinalGeom;
+            std::vector<geom::mesh>             OutMeshes;
+            std::vector<geom::lod>              OutLODs;
+            std::vector<geom::submesh>          OutSubmeshes;
+            std::vector<geom::cluster>          OutClusters;
+            std::vector<geom::vertex>           OutAllStaticVerts;
+            std::vector<geom::vertex_extras>    OutAllExtrasVerts;
+            std::vector<uint32_t>               OutAllIndices;
+            BBox3                               OutGlobalBBox;
+            std::uint16_t                       current_lod_idx         = 0;
+            std::uint16_t                       current_submesh_idx     = 0;
+            std::uint16_t                       current_cluster_idx     = 0;
+            float                               max_extent              = target_precision * 65535.0f;
 
-            std::vector<geom::mesh>                 OutMeshes;
-            std::vector<geom::lod>                  OutLODs;
-            std::vector<geom::submesh>              OutSubmeshes;
-            std::vector<geom::cluster>              OutClusters;
-            std::vector<geom::pos_palette_entry>    OutPosPalettes;
-            std::vector<geom::uv_palette_entry>     OutUVPalettes;
-            std::vector<geom::vertex>               OutAllStaticVerts;
-            std::vector<geom::vertex_extras>        OutAllExtrasVerts;
-            std::vector<uint32_t>                   OutAllIndices;
-            BBox3                                   OutGlobalBBox;
-
-            uint16_t current_lod_idx        = 0;
-            uint16_t current_submesh_idx    = 0;
-            uint16_t current_cluster_idx    = 0;
-
-            float max_extent = target_precision * 65535.0f;
-
-            for (const auto& input_mesh : compiler_meshes) 
+            for (const auto& input_mesh : compiler_meshes)
             {
                 BBox3       mesh_bb         = {};
                 float       total_edge_len  = 0.0f;
                 uint32_t    num_edges       = 0;
-
-                for (const auto& input_sm : input_mesh.m_SubMesh) 
+                for (const auto& input_sm : input_mesh.m_SubMesh)
                 {
-                    for (const auto& v : input_sm.m_Vertex) 
+                    for (const auto& v : input_sm.m_Vertex)
                     {
                         mesh_bb.Update(v.m_Position);
                         OutGlobalBBox.Update(v.m_Position);
                     }
 
-                    for (const auto& lod_in : input_sm.m_LODs) 
+                    for (size_t ti = 0; ti < input_sm.m_Indices.size() / 3; ++ti)
                     {
-                        for (size_t ti = 0; ti < lod_in.m_Indices.size() / 3; ++ti) 
+                        std::uint32_t i1 = input_sm.m_Indices[ti * 3 + 0];
+                        std::uint32_t i2 = input_sm.m_Indices[ti * 3 + 1];
+                        std::uint32_t i3 = input_sm.m_Indices[ti * 3 + 2];
+                        total_edge_len  += (input_sm.m_Vertex[i1].m_Position - input_sm.m_Vertex[i2].m_Position).Length();
+                        total_edge_len  += (input_sm.m_Vertex[i2].m_Position - input_sm.m_Vertex[i3].m_Position).Length();
+                        total_edge_len  += (input_sm.m_Vertex[i3].m_Position - input_sm.m_Vertex[i1].m_Position).Length();
+                        num_edges       += 3;
+                    }
+
+                    for (const auto& lod_in : input_sm.m_LODs)
+                    {
+                        for (size_t ti = 0; ti < lod_in.m_Indices.size() / 3; ++ti)
                         {
                             std::uint32_t i1 = lod_in.m_Indices[ti * 3 + 0];
                             std::uint32_t i2 = lod_in.m_Indices[ti * 3 + 1];
                             std::uint32_t i3 = lod_in.m_Indices[ti * 3 + 2];
-                            total_edge_len += (input_sm.m_Vertex[i1].m_Position - input_sm.m_Vertex[i2].m_Position).Length();
-                            total_edge_len += (input_sm.m_Vertex[i2].m_Position - input_sm.m_Vertex[i3].m_Position).Length();
-                            total_edge_len += (input_sm.m_Vertex[i3].m_Position - input_sm.m_Vertex[i1].m_Position).Length();
-                            num_edges += 3;
+                            total_edge_len  += (input_sm.m_Vertex[i1].m_Position - input_sm.m_Vertex[i2].m_Position).Length();
+                            total_edge_len  += (input_sm.m_Vertex[i2].m_Position - input_sm.m_Vertex[i3].m_Position).Length();
+                            total_edge_len  += (input_sm.m_Vertex[i3].m_Position - input_sm.m_Vertex[i1].m_Position).Length();
+                            num_edges       += 3;
                         }
                     }
                 }
@@ -604,138 +591,604 @@ namespace xgeom_static_compiler
                 out_m.m_Name[31]        = '\0';
                 out_m.m_WorldPixelSize  = (num_edges > 0) ? total_edge_len / num_edges : 0.0f;
                 out_m.m_BBox            = mesh_bb.to_fbbox();
-                out_m.m_nLODs           = static_cast<uint16_t>(input_mesh.m_SubMesh.empty() ? 0 : input_mesh.m_SubMesh[0].m_LODs.size());
+                out_m.m_nLODs           = static_cast<uint16_t>(input_mesh.m_SubMesh.empty() ? 1 : input_mesh.m_SubMesh[0].m_LODs.size() + 1);
                 out_m.m_iLOD            = current_lod_idx;
                 OutMeshes.push_back(out_m);
-                current_lod_idx += out_m.m_nLODs;
 
-                for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level) 
+                current_lod_idx += out_m.m_nLODs;
+                for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level)
                 {
                     geom::lod out_l;
-                    out_l.m_ScreenArea  = input_mesh.m_SubMesh.empty() ? 0.0f : input_mesh.m_SubMesh[0].m_LODs[lod_level].m_ScreenArea;
+                    out_l.m_ScreenArea  = (lod_level == 0) ? 1.0f : (input_mesh.m_SubMesh.empty() ? 0.0f : input_mesh.m_SubMesh[0].m_LODs[lod_level - 1].m_ScreenArea);
                     out_l.m_iSubmesh    = current_submesh_idx;
                     out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
                     OutLODs.push_back(out_l);
-                    current_submesh_idx += out_l.m_nSubmesh;
 
-                    for (const auto& input_sm : input_mesh.m_SubMesh) 
+                    current_submesh_idx += out_l.m_nSubmesh;
+                    for (const auto& input_sm : input_mesh.m_SubMesh)
                     {
                         geom::submesh out_sm;
                         out_sm.m_iMaterial  = static_cast<uint16_t>(input_sm.m_iMaterial);
                         out_sm.m_iCluster   = current_cluster_idx;
 
-                        const std::vector<uint32_t>& lod_indices = (lod_level < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level].m_Indices : input_sm.m_Indices;
-
-                        std::vector<float> binormal_signs(input_sm.m_Vertex.size(), 1.0f);
-                        for (size_t i = 0; i < input_sm.m_Vertex.size(); ++i) 
+                        const std::vector<uint32_t>&  lod_indices     = (lod_level == 0) ? input_sm.m_Indices : ((lod_level - 1 < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level - 1].m_Indices : input_sm.m_Indices);
+                        auto                          binormal_signs  = std::vector<float>(input_sm.m_Vertex.size(), 1.0f);
+                        for (size_t i = 0; i < input_sm.m_Vertex.size(); ++i)
                         {
                             const vertex& v = input_sm.m_Vertex[i];
-                            if (input_sm.m_bHasBTN) 
+                            if (input_sm.m_bHasBTN)
                             {
-                                xmath::fvec3 computed_binormal = xmath::fvec3::Cross(v.m_Normal, v.m_Tangent);
-                                float dot_val = xmath::fvec3::Dot(computed_binormal, v.m_Binormal);
+                                xmath::fvec3    computed_binormal   = xmath::fvec3::Cross(v.m_Normal, v.m_Tangent);
+                                float           dot_val             = xmath::fvec3::Dot(computed_binormal, v.m_Binormal);
                                 binormal_signs[i] = (dot_val >= 0.0f) ? 1.0f : -1.0f;
                             }
                         }
+                        TriCluster  initial  = {};
+                        uint32_t    num_tris = static_cast<uint32_t>(lod_indices.size() / 3);
 
-                        std::vector<int>        vert_pos_pal(input_sm.m_Vertex.size(), -1);
-                        std::vector<uint32_t>   all_local_verts(input_sm.m_Vertex.size());
-                        for (uint32_t i = 0; i < input_sm.m_Vertex.size(); ++i) all_local_verts[i] = i;
-                        RecursePosCluster(input_sm.m_Vertex, all_local_verts, max_extent, OutPosPalettes, vert_pos_pal);
-
-                        std::vector<int> vert_uv_pal(input_sm.m_Vertex.size(), -1);
-                        RecurseUVCluster(input_sm.m_Vertex, all_local_verts, max_extent, OutUVPalettes, vert_uv_pal);
-
-                        TriCluster initial;
-                        uint32_t num_tris = static_cast<uint32_t>(lod_indices.size() / 3);
                         initial.tri_ids.resize(num_tris);
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, vert_pos_pal, vert_uv_pal, binormal_signs, OutPosPalettes, OutUVPalettes, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutAllIndices);
+                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutAllIndices);
 
-                        out_sm.m_nCluster = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
+                        out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
                         OutSubmeshes.push_back(out_sm);
                     }
                 }
             }
+            result.m_nMeshes    = static_cast<std::uint16_t>(OutMeshes.size());
+            result.m_pMesh      = new geom::mesh[result.m_nMeshes];
+            std::ranges::copy(OutMeshes, result.m_pMesh);
+            result.m_nLODs      = static_cast<std::uint16_t>(OutLODs.size());
+            result.m_pLOD       = new geom::lod[result.m_nLODs];
+            std::ranges::copy(OutLODs, result.m_pLOD);
+            result.m_nSubMeshs  = static_cast<std::uint16_t>(OutSubmeshes.size());
+            result.m_pSubMesh   = new geom::submesh[result.m_nSubMeshs];
+            std::ranges::copy(OutSubmeshes, result.m_pSubMesh);
+            result.m_nClusters  = static_cast<std::uint16_t>(OutClusters.size());
+            result.m_pCluster   = new geom::cluster[result.m_nClusters];
+            std::ranges::copy(OutClusters, result.m_pCluster);
+            result.m_BBox       = OutGlobalBBox.to_fbbox();
+            result.m_nVertices  = static_cast<std::uint32_t>(OutAllStaticVerts.size());
+            result.m_nIndices   = static_cast<std::uint32_t>(OutAllIndices.size());
 
-            result.m_pMesh          = new geom::mesh[OutMeshes.size()];
-            result.m_nMeshes        = static_cast<std::uint16_t>(OutMeshes.size());
-            std::copy(OutMeshes.begin(), OutMeshes.end(), result.m_pMesh);
+            //
+            // Set all the material instances
+            //
+            result.m_nDefaultMaterialInstances = static_cast<std::uint16_t>(m_RawGeom.m_MaterialInstance.size());
+            result.m_pDefaultMaterialInstances = new xrsc::material_instance_ref[result.m_nDefaultMaterialInstances];
 
-            result.m_pLOD           = new geom::lod[OutLODs.size()];
-            result.m_nLODs          = static_cast<std::uint16_t>(OutLODs.size());
-            std::copy(OutLODs.begin(), OutLODs.end(), result.m_pLOD);
+            // Set default values
+            std::memset(result.m_pDefaultMaterialInstances, 0, result.m_nDefaultMaterialInstances * sizeof(*result.m_pDefaultMaterialInstances));
 
-            result.m_pSubMesh       = new geom::submesh[OutSubmeshes.size()];
-            result.m_nSubMeshs      = static_cast<std::uint16_t>(OutSubmeshes.size());
-            std::copy(OutSubmeshes.begin(), OutSubmeshes.end(), result.m_pSubMesh);
+            // Set all the materials that we know about
+            for (auto& E : m_RawGeom.m_MaterialInstance)
+            {
+                const auto Index = static_cast<int>(&E - m_RawGeom.m_MaterialInstance.data());
+                if (int iMaterial = m_Descriptor.findMaterial(E.m_Name); iMaterial != -1)
+                    result.m_pDefaultMaterialInstances[Index] = m_Descriptor.m_MaterialInstRefList[iMaterial];
+            }
 
-            result.m_pCluster       = new geom::cluster[OutClusters.size()];
-            result.m_nClusters      = static_cast<std::uint16_t>(OutClusters.size());
-            std::copy(OutClusters.begin(), OutClusters.end(), result.m_pCluster);
-
-            result.m_nDefaultMaterialInstances = 0;
-            result.m_pDefaultMaterialInstances = nullptr;
-
-            result.m_BBox           = OutGlobalBBox.to_fbbox();
-            result.m_nPosPalette    = static_cast<std::uint8_t>(OutPosPalettes.size());
-            result.m_nUVPalette     = static_cast<std::uint8_t>(OutUVPalettes.size());
-            result.m_nVertices      = static_cast<std::uint32_t>(OutAllStaticVerts.size());
-            result.m_nIndices       = static_cast<std::uint32_t>(OutAllIndices.size());
-
+            //
+            // Build the final data
+            //
             // Compute aligned sizes for GPU data
-            auto align = [](size_t offset, size_t alignment) -> size_t
+            auto align = [](std::size_t offset, std::size_t alignment) constexpr -> std::size_t
             {
                 return (offset + alignment - 1) & ~(alignment - 1);
             };
 
-            constexpr std::size_t vulkan_align      = 16;  // Min for Vulkan buffers/UBO
-            const     std::size_t PosPalSize        = OutPosPalettes.size()     * sizeof(geom::pos_palette_entry);
-            const     std::size_t UVPalSize         = OutUVPalettes.size()      * sizeof(geom::uv_palette_entry);
-            const     std::size_t VertexSize        = OutAllStaticVerts.size()  * sizeof(geom::vertex);
-            const     std::size_t ExtrasSize        = OutAllExtrasVerts.size()  * sizeof(geom::vertex_extras);
-            const     std::size_t IndicesSize       = OutAllIndices.size()      * sizeof(std::uint16_t);
-            std::size_t current_offset   = 0;
+            constexpr std::size_t   vulkan_align    = 64; // Min for Vulkan buffers/UBO
+            const std::size_t       VertexSize      = OutAllStaticVerts.size() * sizeof(geom::vertex);
+            const std::size_t       ExtrasSize      = OutAllExtrasVerts.size() * sizeof(geom::vertex_extras);
+            const std::size_t       IndicesSize     = OutAllIndices.size() * sizeof(std::uint16_t);
+            std::size_t             current_offset  = 0;
 
-            result.m_PosPalettesOffset  = current_offset;
-
-            current_offset              = align(current_offset + PosPalSize, vulkan_align);
-            result.m_UVPalettesOffset   = current_offset;
-
-            current_offset              = align(current_offset + UVPalSize, vulkan_align);
-            result.m_VertexOffset       = current_offset;
-
-            current_offset              = align(current_offset + VertexSize, vulkan_align);
-            result.m_VertexExtrasOffset = current_offset;
-
-            current_offset              = align(current_offset + ExtrasSize, vulkan_align);
-            result.m_IndicesOffset      = current_offset;
-
-            // Now we can do the full allocation for everything
-            current_offset              = align(current_offset + IndicesSize, vulkan_align);
-            result.m_DataSize           = current_offset;
-            result.m_pData              = new char[result.m_DataSize];
+            result.m_VertexOffset           = align(current_offset, vulkan_align); current_offset = align(current_offset + VertexSize, vulkan_align);
+            result.m_VertexExtrasOffset     = current_offset; current_offset = align(current_offset + ExtrasSize, vulkan_align);
+            result.m_IndicesOffset          = current_offset; current_offset = align(current_offset + IndicesSize, vulkan_align);
+            result.m_DataSize               = current_offset;
+            result.m_pData                  = new char[result.m_DataSize];
 
             // Copy data into m_pData
-            std::memcpy(result.m_pData + result.m_PosPalettesOffset,    OutPosPalettes.data(),      PosPalSize);
-            std::memcpy(result.m_pData + result.m_UVPalettesOffset,     OutUVPalettes.data(),       UVPalSize);
-            std::memcpy(result.m_pData + result.m_VertexOffset,         OutAllStaticVerts.data(),   VertexSize);
-            std::memcpy(result.m_pData + result.m_VertexExtrasOffset,   OutAllExtrasVerts.data(),   ExtrasSize);
-            char* indices_ptr = result.m_pData + result.m_IndicesOffset;
-            for (size_t i = 0; i < OutAllIndices.size(); ++i) 
+            std::memcpy(result.m_pData + result.m_VertexOffset,         OutAllStaticVerts.data(), VertexSize);
+            std::memcpy(result.m_pData + result.m_VertexExtrasOffset,   OutAllExtrasVerts.data(), ExtrasSize);
+
+            // Copy the indices
+            auto pIndex = reinterpret_cast<std::uint16_t*>(result.m_pData + result.m_IndicesOffset);
+            for (size_t i = 0; i < OutAllIndices.size(); ++i)
             {
                 assert(OutAllIndices[i] < 0xffff);
-                reinterpret_cast<std::uint16_t*>(indices_ptr)[i] = static_cast<std::uint16_t>(OutAllIndices[i]);
+                pIndex[i] = static_cast<std::uint16_t>(OutAllIndices[i]);
+            }
+
+            // Make sure that at least we have one cluster
+            assert(result.m_nClusters >= 1);
+        }
+#endif
+
+        //--------------------------------------------------------------------------------------
+
+        static xmath::fvec2 oct_wrap(xmath::fvec2 v) noexcept
+        {
+            return (xmath::fvec2(1.0f) - xmath::fvec2(v.m_Y, v.m_X).Abs()) * (v.Step({ 0 }) * 2.0f - 1.0f);
+        }
+
+        //--------------------------------------------------------------------------------------
+
+        static xmath::fvec2 oct_encode(xmath::fvec3 n) noexcept
+        {
+            n /= (xmath::Abs(n.m_X) + xmath::Abs(n.m_Y) + xmath::Abs(n.m_Z));
+            xmath::fvec2 p = xmath::fvec2(n.m_X, n.m_Y);
+            if (n.m_Z < 0.0f) p = oct_wrap(p);
+            return p;
+        }
+
+        //--------------------------------------------------------------------------------------
+
+        struct BBox3
+        {
+            xmath::fvec3 m_MinPos = xmath::fvec3(std::numeric_limits<float>::max());
+            xmath::fvec3 m_MaxPos = xmath::fvec3(std::numeric_limits<float>::lowest());
+            void Update(const xmath::fvec3& p) noexcept
+            {
+                m_MinPos = m_MinPos.Min(p);
+                m_MaxPos = m_MaxPos.Max(p);
+            }
+            xmath::fbbox to_fbbox() const
+            {
+                xmath::fbbox bb;
+                bb.m_Min = m_MinPos;
+                bb.m_Max = m_MaxPos;
+                return bb;
+            }
+        };
+
+        //--------------------------------------------------------------------------------------
+
+        struct BBox2
+        {
+            xmath::fvec2 m_MinUV = xmath::fvec2(std::numeric_limits<float>::max());
+            xmath::fvec2 m_MaxUV = xmath::fvec2(std::numeric_limits<float>::lowest());
+            void Update(const xmath::fvec2& uv)
+            {
+                m_MinUV = m_MinUV.Min(uv);
+                m_MaxUV = m_MaxUV.Max(uv);
+            }
+        };
+
+        //--------------------------------------------------------------------------------------
+        // Cluster for recursive splitting (triangle ids)
+
+        struct TriCluster
+        {
+            std::vector<uint32_t> tri_ids;
+        };
+
+        //--------------------------------------------------------------------------------------
+
+        static void RecurseClusterSplit
+        ( const std::vector<vertex>&        InputVerts
+        , const std::vector<uint32_t>&      InputIndices
+        , const TriCluster&                 c
+        , uint32_t                          MaxVerts
+        , const float                       MaxExtent
+        , const std::vector<float>&         BinormalSigns
+        , std::vector<geom::cluster>&       OutputClusters
+        , std::vector<geom::vertex>&        AllStaticVerts
+        , std::vector<geom::vertex_extras>& AllExtrasVerts
+        , std::vector<uint32_t>&            AllIndices
+        )
+        {
+            if (c.tri_ids.empty()) return;
+            BBox3 bb_pos;
+            BBox2 bb_uv;
+
+            for (uint32_t ti : c.tri_ids)
+            {
+                for (int j = 0; j < 3; ++j)
+                {
+                    uint32_t vi = InputIndices[ti * 3 + j];
+                    bb_pos.Update(InputVerts[vi].m_Position);
+                    bb_uv.Update(InputVerts[vi].m_UVs[0]);
+                }
+            }
+
+            xmath::fvec3    extent_pos      = bb_pos.m_MaxPos - bb_pos.m_MinPos;
+            xmath::fvec2    extent_uv       = bb_uv.m_MaxUV - bb_uv.m_MinUV;
+            float           max_e_pos       = std::max({ extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z });
+            float           max_e_uv        = std::max(extent_uv.m_X, extent_uv.m_Y);
+            bool            small_extent    = (max_e_pos <= MaxExtent && max_e_uv <= MaxExtent);
+
+            std::unordered_set<uint32_t> used_verts;
+            if (small_extent)
+            {
+                for (uint32_t ti : c.tri_ids)
+                {
+                    for (int j = 0; j < 3; ++j)
+                    {
+                        used_verts.insert(InputIndices[ti * 3 + j]);
+                    }
+                }
+            }
+
+            if (small_extent && used_verts.size() <= MaxVerts)
+            {
+                // Remap verts locally
+                std::vector<uint32_t> new_vert_ids(used_verts.begin(), used_verts.end());
+                std::sort(new_vert_ids.begin(), new_vert_ids.end());
+                std::unordered_map<uint32_t, uint32_t> old_to_new = {};
+                uint32_t new_id = 0;
+                for (uint32_t ov : new_vert_ids)
+                {
+                    old_to_new[ov] = new_id++;
+                }
+
+                // Use precomputed bboxes
+                xmath::fvec3 pos_min    = bb_pos.m_MinPos;
+                xmath::fvec3 pos_max    = bb_pos.m_MaxPos;
+                xmath::fvec3 pos_center = (pos_min + pos_max) * 0.5f;
+                xmath::fvec3 pos_scale  = xmath::fvec3::Max((pos_max - pos_min) * 0.5f, xmath::fvec3(1e-6f));
+                xmath::fvec2 uv_min     = bb_uv.m_MinUV;
+                xmath::fvec2 uv_max     = bb_uv.m_MaxUV;
+                xmath::fvec2 uv_scale   = xmath::fvec2::Max(uv_max - uv_min, xmath::fvec2(1e-6f));
+
+                // Build local indices
+                std::vector<unsigned int> local_indices;
+                local_indices.reserve(c.tri_ids.size() * 3);
+                for (uint32_t ti : c.tri_ids)
+                {
+                    for (int j = 0; j < 3; ++j)
+                    {
+                        uint32_t ov = InputIndices[ti * 3 + j];
+                        local_indices.push_back(old_to_new[ov]);
+                    }
+                }
+
+                // Optimize vertex cache
+                meshopt_optimizeVertexCache(local_indices.data(), local_indices.data(), local_indices.size(), static_cast<unsigned int>(new_vert_ids.size()));
+
+                // Prepare positions for overdraw optimization
+                std::vector<float> local_positions(new_vert_ids.size() * 3);
+                for (uint32_t i = 0; i < new_vert_ids.size(); ++i)
+                {
+                    const auto& pos = InputVerts[new_vert_ids[i]].m_Position;
+                    local_positions[i * 3 + 0] = pos.m_X;
+                    local_positions[i * 3 + 1] = pos.m_Y;
+                    local_positions[i * 3 + 2] = pos.m_Z;
+                }
+
+                // Optimize overdraw
+                meshopt_optimizeOverdraw(local_indices.data(), local_indices.data(), local_indices.size(), local_positions.data(), static_cast<unsigned int>(new_vert_ids.size()), sizeof(float) * 3, 1.05f);
+
+                // Generate fetch remap
+                std::vector<unsigned int> fetch_remap(new_vert_ids.size());
+                meshopt_optimizeVertexFetchRemap(fetch_remap.data(), local_indices.data(), local_indices.size(), static_cast<unsigned int>(new_vert_ids.size()));
+
+                // Pack original compressed vertices and extras
+                std::vector<geom::vertex>           original_static(new_vert_ids.size());
+                std::vector<geom::vertex_extras>    original_extras(new_vert_ids.size());
+                for (uint32_t i = 0; i < new_vert_ids.size(); ++i)
+                {
+                    const uint32_t  ov          = new_vert_ids[i];
+                    const vertex&   v           = InputVerts[ov];
+                    const float     sign_val    = BinormalSigns[ov];
+                    const int       sign_bit    = (sign_val < 0.0f ? 1 : 0);
+
+                    // Pos compression
+                    const auto pos = ((v.m_Position - pos_center) / pos_scale + 1.0f) * 32767.5f - 32768.0f;
+                    original_static[i].m_XPos   = static_cast<int16_t>(std::round(pos.m_X));
+                    original_static[i].m_YPos   = static_cast<int16_t>(std::round(pos.m_Y));
+                    original_static[i].m_ZPos   = static_cast<int16_t>(std::round(pos.m_Z));
+                    original_static[i].m_Extra  = static_cast<uint16_t>(sign_bit);
+
+                    // UV
+                    const auto norm_uv = (v.m_UVs[0] - uv_min) / uv_scale;
+                    original_extras[i].m_UV[0] = static_cast<uint16_t>(std::round(norm_uv.m_X * 65535.0f));
+                    original_extras[i].m_UV[1] = static_cast<uint16_t>(std::round(norm_uv.m_Y * 65535.0f));
+
+                    // Oct normal/tangent (UNORM8)
+                    const auto oct_n = oct_encode(v.m_Normal.NormalizeSafeCopy());
+                    original_extras[i].m_OctNormal[0] = static_cast<uint8_t>(std::round((oct_n.m_X * 0.5f + 0.5f) * 255.0f));
+                    original_extras[i].m_OctNormal[1] = static_cast<uint8_t>(std::round((oct_n.m_Y * 0.5f + 0.5f) * 255.0f));
+
+                    const auto oct_t = oct_encode(v.m_Tangent.NormalizeSafeCopy());
+                    original_extras[i].m_OctTangent[0] = static_cast<uint8_t>(std::round((oct_t.m_X * 0.5f + 0.5f) * 255.0f));
+                    original_extras[i].m_OctTangent[1] = static_cast<uint8_t>(std::round((oct_t.m_Y * 0.5f + 0.5f) * 255.0f));
+                }
+
+                // Remap vertices and extras
+                std::vector<geom::vertex> remapped_static(new_vert_ids.size());
+                meshopt_remapVertexBuffer(remapped_static.data(), original_static.data(), new_vert_ids.size(), sizeof(geom::vertex), fetch_remap.data());
+
+                std::vector<geom::vertex_extras> remapped_extras(new_vert_ids.size());
+                meshopt_remapVertexBuffer(remapped_extras.data(), original_extras.data(), new_vert_ids.size(), sizeof(geom::vertex_extras), fetch_remap.data());
+
+                // Remap indices
+                meshopt_remapIndexBuffer(local_indices.data(), local_indices.data(), local_indices.size(), fetch_remap.data());
+
+                // Append verts to global
+                uint32_t cluster_vert_start = static_cast<uint32_t>(AllStaticVerts.size());
+                AllStaticVerts.insert(AllStaticVerts.end(), remapped_static.begin(), remapped_static.end());
+                AllExtrasVerts.insert(AllExtrasVerts.end(), remapped_extras.begin(), remapped_extras.end());
+
+                // Append indices to global
+                uint32_t cluster_index_start = static_cast<uint32_t>(AllIndices.size());
+                for (auto idx : local_indices)
+                {
+                    AllIndices.push_back(idx);
+                }
+
+                // Create cluster
+                geom::cluster cl;
+                cl.m_BBox                           = bb_pos.to_fbbox();
+                cl.m_PosScaleAndUScale.m_X          = pos_scale.m_X;
+                cl.m_PosScaleAndUScale.m_Y          = pos_scale.m_Y;
+                cl.m_PosScaleAndUScale.m_Z          = pos_scale.m_Z;
+                cl.m_PosScaleAndUScale.m_W          = uv_scale.m_X;
+                cl.m_PosTrasnlationAndVScale.m_X    = pos_center.m_X;
+                cl.m_PosTrasnlationAndVScale.m_Y    = pos_center.m_Y;
+                cl.m_PosTrasnlationAndVScale.m_Z    = pos_center.m_Z;
+                cl.m_PosTrasnlationAndVScale.m_W    = uv_scale.m_Y;
+                cl.m_UVTranslation.m_X              = uv_min.m_X;
+                cl.m_UVTranslation.m_Y              = uv_min.m_Y;
+                cl.m_iIndex                         = cluster_index_start;
+                cl.m_nIndices                       = static_cast<uint32_t>(c.tri_ids.size() * 3);
+                cl.m_iVertex                        = cluster_vert_start;
+                cl.m_nVertices                      = static_cast<uint32_t>(new_vert_ids.size());
+                OutputClusters.push_back(cl);
+            }
+            else
+            {
+                // Choose split axis based on max extent
+                float   maxes[5]    = { extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z, extent_uv.m_X, extent_uv.m_Y };
+                int     axis        = 0;
+                float   max_val     = maxes[0];
+                for (int i = 1; i < 5; ++i)
+                {
+                    if (maxes[i] > max_val)
+                    {
+                        max_val = maxes[i];
+                        axis = i;
+                    }
+                }
+
+                float   split_pos;
+                bool    is_pos_axis = (axis < 3);
+                int     sub_axis    = is_pos_axis ? axis : (axis - 3);
+                if (is_pos_axis)
+                {
+                    split_pos = (bb_pos.m_MinPos[sub_axis] + bb_pos.m_MaxPos[sub_axis]) * 0.5f;
+                }
+                else
+                {
+                    split_pos = (bb_uv.m_MinUV[sub_axis] + bb_uv.m_MaxUV[sub_axis]) * 0.5f;
+                }
+
+                TriCluster c1, c2;
+                for (uint32_t ti : c.tri_ids)
+                {
+                    uint32_t i0 = InputIndices[ti * 3 + 0];
+                    uint32_t i1 = InputIndices[ti * 3 + 1];
+                    uint32_t i2 = InputIndices[ti * 3 + 2];
+                    float   cent;
+
+                    if (is_pos_axis)
+                    {
+                        xmath::fvec3 cent_pos = (InputVerts[i0].m_Position + InputVerts[i1].m_Position + InputVerts[i2].m_Position) / 3.0f;
+                        cent = cent_pos[sub_axis];
+                    }
+                    else
+                    {
+                        xmath::fvec2 cent_uv = (InputVerts[i0].m_UVs[0] + InputVerts[i1].m_UVs[0] + InputVerts[i2].m_UVs[0]) / 3.0f;
+                        cent = cent_uv[sub_axis];
+                    }
+
+                    if (cent < split_pos)   c1.tri_ids.push_back(ti);
+                    else                    c2.tri_ids.push_back(ti);
+                }
+
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
             }
         }
 
         //--------------------------------------------------------------------------------------
 
+        void ConvertToGeom(float target_precision)
+        {
+            const std::vector<mesh>&            compiler_meshes = m_CompilerMesh;
+            geom&                               result          = m_FinalGeom;
+            std::vector<geom::mesh>             OutMeshes;
+            std::vector<geom::lod>              OutLODs;
+            std::vector<geom::submesh>          OutSubmeshes;
+            std::vector<geom::cluster>          OutClusters;
+            std::vector<geom::vertex>           OutAllStaticVerts;
+            std::vector<geom::vertex_extras>    OutAllExtrasVerts;
+            std::vector<uint32_t>               OutAllIndices;
+            BBox3                               OutGlobalBBox;
+            std::uint16_t                       current_lod_idx         = 0;
+            std::uint16_t                       current_submesh_idx     = 0;
+            std::uint16_t                       current_cluster_idx     = 0;
+            float                               max_extent              = target_precision * 65535.0f;
+
+            for (const auto& input_mesh : compiler_meshes)
+            {
+                BBox3       mesh_bb         = {};
+                float       total_edge_len  = 0.0f;
+                uint32_t    num_edges       = 0;
+                for (const auto& input_sm : input_mesh.m_SubMesh)
+                {
+                    for (const auto& v : input_sm.m_Vertex)
+                    {
+                        mesh_bb.Update(v.m_Position);
+                        OutGlobalBBox.Update(v.m_Position);
+                    }
+
+                    for (size_t ti = 0; ti < input_sm.m_Indices.size() / 3; ++ti)
+                    {
+                        std::uint32_t i1 = input_sm.m_Indices[ti * 3 + 0];
+                        std::uint32_t i2 = input_sm.m_Indices[ti * 3 + 1];
+                        std::uint32_t i3 = input_sm.m_Indices[ti * 3 + 2];
+                        total_edge_len  += (input_sm.m_Vertex[i1].m_Position - input_sm.m_Vertex[i2].m_Position).Length();
+                        total_edge_len  += (input_sm.m_Vertex[i2].m_Position - input_sm.m_Vertex[i3].m_Position).Length();
+                        total_edge_len  += (input_sm.m_Vertex[i3].m_Position - input_sm.m_Vertex[i1].m_Position).Length();
+                        num_edges       += 3;
+                    }
+
+                    for (const auto& lod_in : input_sm.m_LODs)
+                    {
+                        for (size_t ti = 0; ti < lod_in.m_Indices.size() / 3; ++ti)
+                        {
+                            std::uint32_t i1 = lod_in.m_Indices[ti * 3 + 0];
+                            std::uint32_t i2 = lod_in.m_Indices[ti * 3 + 1];
+                            std::uint32_t i3 = lod_in.m_Indices[ti * 3 + 2];
+                            total_edge_len  += (input_sm.m_Vertex[i1].m_Position - input_sm.m_Vertex[i2].m_Position).Length();
+                            total_edge_len  += (input_sm.m_Vertex[i2].m_Position - input_sm.m_Vertex[i3].m_Position).Length();
+                            total_edge_len  += (input_sm.m_Vertex[i3].m_Position - input_sm.m_Vertex[i1].m_Position).Length();
+                            num_edges       += 3;
+                        }
+                    }
+                }
+
+                geom::mesh out_m;
+                xstrtool::Copy(out_m.m_Name, input_mesh.m_Name);
+                out_m.m_Name[31]        = '\0';
+                out_m.m_WorldPixelSize  = (num_edges > 0) ? total_edge_len / num_edges : 0.0f;
+                out_m.m_BBox            = mesh_bb.to_fbbox();
+                out_m.m_nLODs           = static_cast<uint16_t>(input_mesh.m_SubMesh.empty() ? 1 : input_mesh.m_SubMesh[0].m_LODs.size() + 1);
+                out_m.m_iLOD            = current_lod_idx;
+                OutMeshes.push_back(out_m);
+
+                current_lod_idx += out_m.m_nLODs;
+                for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level)
+                {
+                    geom::lod out_l;
+                    out_l.m_ScreenArea  = (lod_level == 0) ? 1.0f : (input_mesh.m_SubMesh.empty() ? 0.0f : input_mesh.m_SubMesh[0].m_LODs[lod_level - 1].m_ScreenArea);
+                    out_l.m_iSubmesh    = current_submesh_idx;
+                    out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
+                    OutLODs.push_back(out_l);
+
+                    current_submesh_idx += out_l.m_nSubmesh;
+                    for (const auto& input_sm : input_mesh.m_SubMesh)
+                    {
+                        geom::submesh out_sm;
+                        out_sm.m_iMaterial  = static_cast<uint16_t>(input_sm.m_iMaterial);
+                        out_sm.m_iCluster   = current_cluster_idx;
+
+                        const std::vector<uint32_t>&  lod_indices     = (lod_level == 0) ? input_sm.m_Indices : ((lod_level - 1 < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level - 1].m_Indices : input_sm.m_Indices);
+                        auto                          binormal_signs  = std::vector<float>(input_sm.m_Vertex.size(), 1.0f);
+                        for (size_t i = 0; i < input_sm.m_Vertex.size(); ++i)
+                        {
+                            const vertex& v = input_sm.m_Vertex[i];
+                            if (input_sm.m_bHasBTN)
+                            {
+                                xmath::fvec3    computed_binormal   = xmath::fvec3::Cross(v.m_Normal, v.m_Tangent);
+                                float           dot_val             = xmath::fvec3::Dot(computed_binormal, v.m_Binormal);
+                                binormal_signs[i] = (dot_val >= 0.0f) ? 1.0f : -1.0f;
+                            }
+                        }
+                        TriCluster  initial  = {};
+                        uint32_t    num_tris = static_cast<uint32_t>(lod_indices.size() / 3);
+
+                        initial.tri_ids.resize(num_tris);
+                        for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
+
+                        size_t prev_num_clusters = OutClusters.size();
+                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutAllIndices);
+
+                        out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
+                        current_cluster_idx += out_sm.m_nCluster;
+                        OutSubmeshes.push_back(out_sm);
+                    }
+                }
+            }
+            result.m_nMeshes    = static_cast<std::uint16_t>(OutMeshes.size());
+            result.m_pMesh      = new geom::mesh[result.m_nMeshes];
+            std::ranges::copy(OutMeshes, result.m_pMesh);
+            result.m_nLODs      = static_cast<std::uint16_t>(OutLODs.size());
+            result.m_pLOD       = new geom::lod[result.m_nLODs];
+            std::ranges::copy(OutLODs, result.m_pLOD);
+            result.m_nSubMeshs  = static_cast<std::uint16_t>(OutSubmeshes.size());
+            result.m_pSubMesh   = new geom::submesh[result.m_nSubMeshs];
+            std::ranges::copy(OutSubmeshes, result.m_pSubMesh);
+            result.m_nClusters  = static_cast<std::uint16_t>(OutClusters.size());
+            result.m_pCluster   = new geom::cluster[result.m_nClusters];
+            std::ranges::copy(OutClusters, result.m_pCluster);
+            result.m_BBox       = OutGlobalBBox.to_fbbox();
+            result.m_nVertices  = static_cast<std::uint32_t>(OutAllStaticVerts.size());
+            result.m_nIndices   = static_cast<std::uint32_t>(OutAllIndices.size());
+
+            //
+            // Set all the material instances
+            //
+            result.m_nDefaultMaterialInstances = static_cast<std::uint16_t>(m_RawGeom.m_MaterialInstance.size());
+            result.m_pDefaultMaterialInstances = new xrsc::material_instance_ref[result.m_nDefaultMaterialInstances];
+
+            // Set default values
+            std::memset(result.m_pDefaultMaterialInstances, 0, result.m_nDefaultMaterialInstances * sizeof(*result.m_pDefaultMaterialInstances));
+
+            // Set all the materials that we know about
+            for (auto& E : m_RawGeom.m_MaterialInstance)
+            {
+                const auto Index = static_cast<int>(&E - m_RawGeom.m_MaterialInstance.data());
+                if (int iMaterial = m_Descriptor.findMaterial(E.m_Name); iMaterial != -1)
+                    result.m_pDefaultMaterialInstances[Index] = m_Descriptor.m_MaterialInstRefList[iMaterial];
+            }
+
+            //
+            // Build the final data
+            //
+            // Compute aligned sizes for GPU data
+            auto align = [](std::size_t offset, std::size_t alignment) constexpr -> std::size_t
+            {
+                return (offset + alignment - 1) & ~(alignment - 1);
+            };
+
+            constexpr std::size_t   vulkan_align    = 64; // Min for Vulkan buffers/UBO
+            const std::size_t       VertexSize      = OutAllStaticVerts.size() * sizeof(geom::vertex);
+            const std::size_t       ExtrasSize      = OutAllExtrasVerts.size() * sizeof(geom::vertex_extras);
+            const std::size_t       IndicesSize     = OutAllIndices.size() * sizeof(std::uint16_t);
+            std::size_t             current_offset  = 0;
+
+            result.m_VertexOffset           = align(current_offset, vulkan_align); current_offset = align(current_offset + VertexSize, vulkan_align);
+            result.m_VertexExtrasOffset     = current_offset; current_offset = align(current_offset + ExtrasSize, vulkan_align);
+            result.m_IndicesOffset          = current_offset; current_offset = align(current_offset + IndicesSize, vulkan_align);
+            result.m_DataSize               = current_offset;
+            result.m_pData                  = new char[result.m_DataSize];
+
+            // Copy data into m_pData
+            std::memcpy(result.m_pData + result.m_VertexOffset,         OutAllStaticVerts.data(), VertexSize);
+            std::memcpy(result.m_pData + result.m_VertexExtrasOffset,   OutAllExtrasVerts.data(), ExtrasSize);
+
+            // Copy the indices
+            auto pIndex = reinterpret_cast<std::uint16_t*>(result.m_pData + result.m_IndicesOffset);
+            for (size_t i = 0; i < OutAllIndices.size(); ++i)
+            {
+                assert(OutAllIndices[i] < 0xffff);
+                pIndex[i] = static_cast<std::uint16_t>(OutAllIndices[i]);
+            }
+
+            // Make sure that at least we have one cluster
+            assert(result.m_nClusters >= 1);
+        }
+
+
+        //--------------------------------------------------------------------------------------
+
         void MergeMeshes()
         {
+            if ( m_Descriptor.hasMergedMesh() == false )
+                m_Descriptor.AddMergedMesh();
+
+            //
+            // Let us take out the merged mesh
+            //
+            auto TempMergeMesh = m_Descriptor.m_MeshList[ m_Descriptor.findMesh(xgeom_static::merged_mesh_name_v) ];
+            m_Descriptor.RemoveMergedMesh();
+
             //
             // Check if we actually have any work to do...
             //
@@ -827,9 +1280,10 @@ namespace xgeom_static_compiler
             //
             // The new merge mesh
             //
-            m_RawGeom.m_Mesh[iMergedMesh].m_Name    = "Merged Mesh";
+            m_Descriptor.m_MeshList.emplace_back(std::move(TempMergeMesh));
+            m_RawGeom.m_Mesh.resize(iMergedMesh + 1);
+            m_RawGeom.m_Mesh[iMergedMesh].m_Name    = xgeom_static::merged_mesh_name_v;
             m_RawGeom.m_Mesh[iMergedMesh].m_nBones  = 0;
-            m_RawGeom.m_Mesh.resize(iMergedMesh+1);
         }
 
         //--------------------------------------------------------------------------------------
@@ -845,9 +1299,31 @@ namespace xgeom_static_compiler
                     displayProgressBar("Merging Meshes", 0);
                 }
 
+
+                if (   m_Descriptor.m_PreTranslation.m_Scale       != xmath::fvec3::fromOne() 
+                    || m_Descriptor.m_PreTranslation.m_Translation != xmath::fvec3::fromZero()
+                    || m_Descriptor.m_PreTranslation.m_Rotation    != xmath::fvec3::fromZero() )
+                {
+                    displayProgressBar("PreTranslatingMeshes", 0);
+
+                    xmath::radian3 Rot;
+                    Rot.m_Roll  = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_Z) };
+                    Rot.m_Pitch = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_X) };
+                    Rot.m_Yaw   = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_Y) };
+
+                    xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
+                    for (auto& E : m_RawGeom.m_Vertex )
+                    {
+                        E.m_Position = M * E.m_Position;
+                    }
+
+                    displayProgressBar("PreTranslatingMeshes", 1);
+                }
+
+
                 displayProgressBar("Cleaning up Geom", 1);
-                m_RawGeom.CleanMesh();
-                m_RawGeom.SortFacetsByMeshMaterialBone();
+               // m_RawGeom.CleanMesh();
+               // m_RawGeom.SortFacetsByMeshMaterialBone();
                 displayProgressBar("Cleaning up Geom", 1);
 
                 //
@@ -933,13 +1409,23 @@ namespace xgeom_static_compiler
             for ( auto& M : m_Details.m_Meshes )
             {
                 const auto  index = static_cast<int>(&M - m_Details.m_Meshes.data());
-                M.m_NumMaterials = 0;
-                for ( auto& I : MeshMatUsage[index] ) M.m_NumMaterials += I?1:0;
+
+                // Set all the materials used by this mesh
+                for (auto& E : MeshMatUsage[index])
+                {
+                    if ( E == 0 ) continue;
+
+                    const auto  iMat = static_cast<int>(&E - MeshMatUsage[index].data());
+                    M.m_MaterialList.push_back(m_RawGeom.m_MaterialInstance[iMat].m_Name);
+                }
             }
+
+            // Set all the materials
+            for (auto& E : m_RawGeom.m_MaterialInstance)
+                m_Details.m_MaterialList.push_back(E.m_Name);
 
             // Find total faces
             m_Details.m_NumFaces        = 0;
-            m_Details.m_NumMaterials    = static_cast<int>(m_RawGeom.m_MaterialInstance.size());
             for (auto& M : m_Details.m_Meshes)
             {
                 m_Details.m_NumFaces += M.m_NumFaces;
@@ -954,7 +1440,6 @@ namespace xgeom_static_compiler
             // Read the descriptor file...
             //
             displayProgressBar("Loading Descriptor", 0);
-            if (0)
             {
                 xproperty::settings::context    Context{};
                 auto                            DescriptorFileName = std::format(L"{}/{}/Descriptor.txt", m_ProjectPaths.m_Project, m_InputSrcDescriptorPath);
@@ -966,7 +1451,6 @@ namespace xgeom_static_compiler
             //
             // Do a quick validation of the descriptor
             //
-            if (0)
             {
                 std::vector<std::string> Errors;
                 m_Descriptor.Validate(Errors);
@@ -979,11 +1463,6 @@ namespace xgeom_static_compiler
                 }
             }
             displayProgressBar("Loading Descriptor", 1);
-
-
-            m_Descriptor.m_ImportAsset = std::wstring(L"Assets\\materialpreview-frozen.fbx");
-            m_Descriptor.m_ImportAsset = std::wstring(L"Assets\\PuppyDog\\source\\Puppy Robot2.fbx");
-            m_Descriptor.m_bMergeMeshes = true;
 
             //
             // Load the source data
@@ -1002,6 +1481,19 @@ namespace xgeom_static_compiler
             // OK Time to compile
             //
             Compile();
+
+            //
+            // Serialize the details structure
+            //
+            {
+                xtextfile::stream File;
+                if (auto Err = File.Open(false, std::format(L"{}\\Details.txt", m_ResourceLogPath), xtextfile::file_type::TEXT); Err)
+                    return xerr::create_f<state, "Failed while opening the details.txt so it can't be saved">(Err);
+
+                xproperty::settings::context C{};
+                if ( auto Err = xproperty::sprop::serializer::Stream( File, m_Details, C); Err )
+                    return xerr::create_f<state, "Failed while serializing details.txt">(Err);
+            }
 
             //
             // Export
@@ -1028,7 +1520,7 @@ namespace xgeom_static_compiler
             if( auto Err = Serializer.Save
                 ( FilePath
                 , m_FinalGeom
-                , m_OptimizationType == optimization_type::O0     ? xserializer::compression_level::FAST : xserializer::compression_level::HIGH
+                , m_OptimizationType == optimization_type::O0 ? xserializer::compression_level::FAST : m_OptimizationType == optimization_type::O1 ? xserializer::compression_level::MEDIUM : xserializer::compression_level::HIGH
                 ); Err )
             {
                 throw(std::runtime_error(std::string(Err.getMessage())));
