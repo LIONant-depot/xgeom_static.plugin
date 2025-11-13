@@ -70,7 +70,7 @@ namespace xgeom_static_compiler
         {
             xraw3d::assimp_v2::importer Importer;
             Importer.m_Settings.m_bAnimated = false;
-            if ( auto Err = Importer.Import(Path, m_RawGeom); Err )
+            if ( auto Err = Importer.Import(Path, m_RawGeom, m_RootNode); Err )
                 return xerr::create_f<state, "Failed to import the asset">(Err);
 
             return {};
@@ -215,31 +215,6 @@ namespace xgeom_static_compiler
                 }
             }
         }
-
-        //--------------------------------------------------------------------------------------
-
-        void optimizeFacesAndVerts()
-        {
-            for( auto& M : m_CompilerMesh)
-            {
-                const size_t kCacheSize = 16;
-                for( auto& S : M.m_SubMesh )
-                {
-                    meshopt_optimizeVertexCache ( S.m_Indices.data(), S.m_Indices.data(), S.m_Indices.size(), S.m_Vertex.size() ); 
-                    meshopt_optimizeOverdraw    ( S.m_Indices.data(), S.m_Indices.data(), S.m_Indices.size(), &S.m_Vertex[0].m_Position.m_X, S.m_Vertex.size(), sizeof(vertex), 1.0f );
-
-                    for( auto& L : S.m_LODs )
-                    {
-                        meshopt_optimizeVertexCache ( L.m_Indices.data(), L.m_Indices.data(), L.m_Indices.size(), S.m_Vertex.size() );
-                        meshopt_optimizeOverdraw    ( L.m_Indices.data(), L.m_Indices.data(), L.m_Indices.size(), &S.m_Vertex[0].m_Position.m_X, S.m_Vertex.size(), sizeof(vertex), 1.0f );
-                    }
-                }
-            }
-        }
-
-
-
-
 
 #if 0
         //--------------------------------------------------------------------------------------
@@ -1336,14 +1311,11 @@ namespace xgeom_static_compiler
                 GenenateLODs();
                 displayProgressBar("Generating LODs", 0);
 
-                displayProgressBar("Optimizing", 0);
-                optimizeFacesAndVerts();
-                displayProgressBar("Optimizing", 1);
-
                 //
                 // Generate final mesh
                 //
                 displayProgressBar("Generating Final Mesh", 0);
+
                 // mm accuracy
                 ConvertToGeom(0.001f);
                 
@@ -1363,11 +1335,11 @@ namespace xgeom_static_compiler
         void ComputeDetailStructure()
         {
             // Collect all the meshes
-            m_Details.m_Meshes.resize(m_RawGeom.m_Mesh.size());
+            m_Details.m_MeshList.resize(m_RawGeom.m_Mesh.size());
             for ( auto& M : m_RawGeom.m_Mesh )
             {
                 const auto  index   = static_cast<int>(&M - m_RawGeom.m_Mesh.data());
-                auto&       DM      = m_Details.m_Meshes[index];
+                auto&       DM      = m_Details.m_MeshList[index];
 
                 DM.m_Name           = M.m_Name;
                 DM.m_NumFaces       = 0;
@@ -1392,23 +1364,23 @@ namespace xgeom_static_compiler
             for( auto& F : m_RawGeom.m_Facet)
             {
                 const auto  index = static_cast<int>(&F - m_RawGeom.m_Facet.data());
-                m_Details.m_Meshes[F.m_iMesh].m_NumFaces++;
+                m_Details.m_MeshList[F.m_iMesh].m_NumFaces++;
 
                 for ( int i=0; i<F.m_nVertices; ++i)
                 {
-                    m_Details.m_Meshes[F.m_iMesh].m_NumColors   = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumColors,   m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nColors );
-                    m_Details.m_Meshes[F.m_iMesh].m_NumUVs      = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumUVs,      m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nUVs    );
-                    m_Details.m_Meshes[F.m_iMesh].m_NumNormals  = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumNormals,  m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nNormals);
-                    m_Details.m_Meshes[F.m_iMesh].m_NumTangents = std::max(m_Details.m_Meshes[F.m_iMesh].m_NumTangents, m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nTangents);
+                    m_Details.m_MeshList[F.m_iMesh].m_NumColors   = std::max(m_Details.m_MeshList[F.m_iMesh].m_NumColors,   m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nColors );
+                    m_Details.m_MeshList[F.m_iMesh].m_NumUVs      = std::max(m_Details.m_MeshList[F.m_iMesh].m_NumUVs,      m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nUVs    );
+                    m_Details.m_MeshList[F.m_iMesh].m_NumNormals  = std::max(m_Details.m_MeshList[F.m_iMesh].m_NumNormals,  m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nNormals);
+                    m_Details.m_MeshList[F.m_iMesh].m_NumTangents = std::max(m_Details.m_MeshList[F.m_iMesh].m_NumTangents, m_RawGeom.m_Vertex[F.m_iVertex[0]].m_nTangents);
                 }
 
                 MeshMatUsage[F.m_iMesh][F.m_iMaterialInstance]++;
             }
 
             // Set the material instance counts...
-            for ( auto& M : m_Details.m_Meshes )
+            for ( auto& M : m_Details.m_MeshList)
             {
-                const auto  index = static_cast<int>(&M - m_Details.m_Meshes.data());
+                const auto  index = static_cast<int>(&M - m_Details.m_MeshList.data());
 
                 // Set all the materials used by this mesh
                 for (auto& E : MeshMatUsage[index])
@@ -1416,17 +1388,31 @@ namespace xgeom_static_compiler
                     if ( E == 0 ) continue;
 
                     const auto  iMat = static_cast<int>(&E - MeshMatUsage[index].data());
-                    M.m_MaterialList.push_back(m_RawGeom.m_MaterialInstance[iMat].m_Name);
+                    M.m_MaterialList.push_back(iMat);
                 }
             }
 
+            // collect all the nodes
+            std::function<void(xgeom_static::details::node&, const xraw3d::assimp_v2::node&)> CollectNodes = [&](xgeom_static::details::node& FinalNode, const xraw3d::assimp_v2::node& Node )
+            {
+                FinalNode.m_Name     = Node.m_Name;
+                FinalNode.m_MeshList.reserve(Node.m_MeshList.size());
+
+                for ( auto& E : Node.m_MeshList ) FinalNode.m_MeshList.emplace_back(static_cast<int>(E));
+
+                for ( auto& E : Node.m_Children ) CollectNodes( FinalNode.m_Children.emplace_back(), E);
+            };
+            CollectNodes(m_Details.m_RootNode, m_RootNode);
+
             // Set all the materials
             for (auto& E : m_RawGeom.m_MaterialInstance)
-                m_Details.m_MaterialList.push_back(E.m_Name);
+            {
+                m_Details.m_MaterialList.emplace_back(E.m_Name);
+            }
 
             // Find total faces
             m_Details.m_NumFaces        = 0;
-            for (auto& M : m_Details.m_Meshes)
+            for (auto& M : m_Details.m_MeshList)
             {
                 m_Details.m_NumFaces += M.m_NumFaces;
             }
@@ -1540,6 +1526,7 @@ namespace xgeom_static_compiler
         xgeom_static::geom              m_FinalGeom;
         std::vector<mesh>               m_CompilerMesh;
         xraw3d::geom                    m_RawGeom;
+        xraw3d::assimp_v2::node         m_RootNode;
     };
 
     //------------------------------------------------------------------------------------

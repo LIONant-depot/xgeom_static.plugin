@@ -9,7 +9,7 @@ namespace xgeom_static
         struct mesh
         {
             std::string                 m_Name          = {};
-            std::vector<std::string>    m_MaterialList  = {};
+            std::vector<int>            m_MaterialList  = {};
             int                         m_NumFaces      = 0;
             int                         m_NumUVs        = 0;
             int                         m_NumColors     = 0;
@@ -26,11 +26,25 @@ namespace xgeom_static
             )
         };
 
+        struct node
+        {
+            std::string                 m_Name;
+            std::vector<int>            m_MeshList;
+            std::vector<node>           m_Children;
+
+            XPROPERTY_DEF
+            ( "node", node
+            , obj_member<"Name",        &node::m_Name >
+            , obj_member<"Mesh",        &node::m_MeshList >
+            , obj_member<"Children",    &node::m_Children >
+            )
+        };
 
         int findMesh( std::string_view Name ) const noexcept
         {
-            for ( auto& E : m_Meshes)
-                if ( E.m_Name == Name ) return static_cast<int>(&E - m_Meshes.data());
+            for ( auto& E : m_MeshList )
+                if ( E.m_Name == Name ) return static_cast<int>(&E - m_MeshList.data());
+
             return -1;
         }
 
@@ -41,19 +55,22 @@ namespace xgeom_static
             return -1;
         }
 
+        std::vector<mesh>           m_MeshList;
         std::vector<std::string>    m_MaterialList;
-        std::vector<mesh>           m_Meshes;
         int                         m_NumFaces;
+        node                        m_RootNode;
 
         XPROPERTY_DEF
         ( "details", details
-        , obj_member<"Meshes",              &details::m_Meshes, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"NumFaces",            &details::m_NumFaces, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"MaterialList",        &details::m_MaterialList, member_flags<flags::SHOW_READONLY> >
+        , obj_member<"RootNode",            &details::m_RootNode,       member_flags<flags::SHOW_READONLY> >
+        , obj_member<"MeshList",            &details::m_MeshList,       member_flags<flags::SHOW_READONLY> >
+        , obj_member<"NumFaces",            &details::m_NumFaces,       member_flags<flags::SHOW_READONLY> >
+        , obj_member<"MaterialList",        &details::m_MaterialList,   member_flags<flags::SHOW_READONLY> >
         )
     };
     XPROPERTY_REG(details)
     XPROPERTY_REG2(mesh_, details::mesh)
+    XPROPERTY_REG2(node_, details::node)
 }
 
 #endif
