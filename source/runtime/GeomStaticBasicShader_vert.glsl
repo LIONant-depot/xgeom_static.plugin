@@ -23,10 +23,11 @@ layout(push_constant) uniform PushConsts
     vec2 uvTranslation;                 // .xy = UV translation
     mat4 L2w;                           // Local to small world (camera-centered)
     mat4 w2C;                           // Small world to clip space
-    vec4 LightColor;
-    vec4 AmbientLightColor;
-    vec4 wSpaceLightPos;
-    vec4 wSpaceEyePos;
+    mat4 L2CShadow;                     // Shadow space matrix
+    //vec4 LightColor;
+    //vec4 AmbientLightColor;
+    //vec4 wSpaceLightPos;
+    //vec4 wSpaceEyePos;
 
 } push;
 
@@ -40,6 +41,7 @@ layout(location = 0) out struct _o
 {
     mat3 T2w;                           // Tangent space to w/small world (Rotation Only)
     vec4 wSpacePosition;                // Vertex pos in w/"small world"
+    vec4 ShadowPosition;                // Vertex position in shadow space
     vec2 UV;                            // Just your regular UVs
 } Out;
 
@@ -47,9 +49,10 @@ void main()
 {
     // Decode position: int16 [-32768,32767] -> norm [-1,1]
     vec3    norm_pos            = (vec3(in_PosExtra.xyz) + 32768.0) / 32767.5 - 1.0;
-    vec3    local_pos           = norm_pos * push.posScaleAndUScale.xyz + push.posTranslationAndVScale.xyz;
-    Out.wSpacePosition          = push.L2w * vec4(local_pos, 1.0);
-    gl_Position                 = push.w2C * Out.wSpacePosition;
+    vec4    local_pos           = vec4( norm_pos.xyz * push.posScaleAndUScale.xyz + push.posTranslationAndVScale.xyz, 1.0);
+    Out.wSpacePosition          = push.L2w       * local_pos;
+    Out.ShadowPosition          = push.L2CShadow * local_pos;
+    gl_Position                 = push.w2C       * Out.wSpacePosition;
 
     // Decode normalized UV: uint16 [0,65535] -> [0,1] (intermediate)
     // Final UV can be outside [0,1] or negative for wrapping/tiling
