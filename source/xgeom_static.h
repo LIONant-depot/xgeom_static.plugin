@@ -49,11 +49,15 @@ namespace xgeom_static
             float m_X, m_Y, m_Z, m_W;
         };
 
+        struct cluster_data
+        {
+            vec4                    m_PosScaleAndWPADDING;        // XYZ scale for the cluster, W = U Scale
+            vec4                    m_PosTrasnlationAndWPADDING;  // XYZ scale for the cluster, W = V Scale
+            vec4                    m_UVScaleTranslation;         // UV Translation.
+        };
+
         struct cluster
         {
-            vec4                    m_PosScaleAndUScale;        // XYZ scale for the cluster, W = U Scale
-            vec4                    m_PosTrasnlationAndVScale;  // XYZ scale for the cluster, W = V Scale
-            vec2                    m_UVTranslation;            // UV Translation.            
             xmath::fbbox            m_BBox;                     // Optional fine-grained CPU culling (e.g., per-cluster frustum/occlusion)
             std::uint32_t           m_iIndex;                   // Where the index starts
             std::uint32_t           m_nIndices;                 // number of
@@ -74,7 +78,7 @@ namespace xgeom_static
             std::array<std::uint8_t, 2>     m_OctTangent;
         };
 
-        using runtime_allocation = std::array<std::size_t, 3*2>;
+        using runtime_allocation = std::array<std::size_t, 4*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
 
         //-------------------------------------------------------------------------
 
@@ -88,9 +92,10 @@ namespace xgeom_static
         inline std::span<lod>                           getLODs                     (void)                              const   noexcept { return { m_pLOD, m_nLODs }; }
         inline std::span<submesh>                       getSubmeshes                (void)                              const   noexcept { return { m_pSubMesh, m_nSubMeshs }; }
         inline std::span<cluster>                       getClusters                 (void)                              const   noexcept { return { m_pCluster, m_nClusters }; }
-        inline std::span<vertex>                        getVertices                 (void)                              const   noexcept { return { reinterpret_cast<vertex*>(m_pData + m_VertexOffset), m_nVertices }; }
-        inline std::span<vertex_extras>                 getVertexExtras             (void)                              const   noexcept { return { reinterpret_cast<vertex_extras*>(m_pData + m_VertexExtrasOffset), m_nVertices }; }
-        inline std::span<std::uint16_t>                 getIndices                  (void)                              const   noexcept { return { reinterpret_cast<std::uint16_t*>(m_pData + m_IndicesOffset), m_nIndices }; }
+        inline std::span<vertex>                        getVertices                 (void)                              const   noexcept { return { reinterpret_cast<vertex*>       (m_pData + m_VertexOffset),         m_nVertices }; }
+        inline std::span<vertex_extras>                 getVertexExtras             (void)                              const   noexcept { return { reinterpret_cast<vertex_extras*>(m_pData + m_VertexExtrasOffset),   m_nVertices }; }
+        inline std::span<std::uint16_t>                 getIndices                  (void)                              const   noexcept { return { reinterpret_cast<std::uint16_t*>(m_pData + m_IndicesOffset),        m_nIndices  }; }
+        inline std::span<cluster_data>                  getClusterData              (void)                              const   noexcept { return { reinterpret_cast<cluster_data*> (m_pData + m_ClusterDataOffset),    m_nClusters }; }
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
 
         xmath::fbbox                    m_BBox;
@@ -105,6 +110,7 @@ namespace xgeom_static
         std::size_t                     m_VertexOffset;
         std::size_t                     m_VertexExtrasOffset;
         std::size_t                     m_IndicesOffset;
+        std::size_t                     m_ClusterDataOffset;
         std::uint16_t                   m_nMeshes;
         std::uint16_t                   m_nLODs;
         std::uint16_t                   m_nSubMeshs;
@@ -214,19 +220,6 @@ namespace xserializer::io_functions
     {
         xerr Err;
         false
-            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_X))
-            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_Y))
-            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_Z))
-            || (Err = Stream.Serialize(Cluster.m_PosScaleAndUScale.m_W))
-
-            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_X))
-            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_Y))
-            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_Z))
-            || (Err = Stream.Serialize(Cluster.m_PosTrasnlationAndVScale.m_W))
-
-            || (Err = Stream.Serialize(Cluster.m_UVTranslation.m_X))
-            || (Err = Stream.Serialize(Cluster.m_UVTranslation.m_Y))
-
             || (Err = Stream.Serialize(Cluster.m_nVertices))
             || (Err = Stream.Serialize(Cluster.m_nIndices))
             || (Err = Stream.Serialize(Cluster.m_iIndex))
@@ -276,6 +269,7 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_VertexOffset))
             || (Err = Stream.Serialize(Geom.m_VertexExtrasOffset))
             || (Err = Stream.Serialize(Geom.m_IndicesOffset))
+            || (Err = Stream.Serialize(Geom.m_ClusterDataOffset))
             || (Err = Stream.Serialize(Geom.m_nVertices))
             || (Err = Stream.Serialize(Geom.m_nIndices))
             ;

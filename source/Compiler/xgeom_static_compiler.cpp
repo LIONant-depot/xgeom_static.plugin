@@ -754,6 +754,7 @@ namespace xgeom_static_compiler
         , std::vector<geom::cluster>&       OutputClusters
         , std::vector<geom::vertex>&        AllStaticVerts
         , std::vector<geom::vertex_extras>& AllExtrasVerts
+        , std::vector<geom::cluster_data>&  AllClusterData
         , std::vector<uint32_t>&            AllIndices
         )
         {
@@ -897,18 +898,21 @@ namespace xgeom_static_compiler
                 }
 
                 // Create cluster
-                geom::cluster cl;
+                geom::cluster_data  cd;
+                cd.m_PosScaleAndWPADDING.m_X        = pos_scale.m_X;
+                cd.m_PosScaleAndWPADDING.m_Y        = pos_scale.m_Y;
+                cd.m_PosScaleAndWPADDING.m_Z        = pos_scale.m_Z;
+                cd.m_PosTrasnlationAndWPADDING.m_X  = pos_center.m_X;
+                cd.m_PosTrasnlationAndWPADDING.m_Y  = pos_center.m_Y;
+                cd.m_PosTrasnlationAndWPADDING.m_Z  = pos_center.m_Z;
+                cd.m_UVScaleTranslation.m_X         = uv_scale.m_X;
+                cd.m_UVScaleTranslation.m_Y         = uv_scale.m_Y;
+                cd.m_UVScaleTranslation.m_Z         = uv_min.m_X;
+                cd.m_UVScaleTranslation.m_W         = uv_min.m_Y;
+                AllClusterData.push_back(cd);
+
+                geom::cluster       cl;
                 cl.m_BBox                           = bb_pos.to_fbbox();
-                cl.m_PosScaleAndUScale.m_X          = pos_scale.m_X;
-                cl.m_PosScaleAndUScale.m_Y          = pos_scale.m_Y;
-                cl.m_PosScaleAndUScale.m_Z          = pos_scale.m_Z;
-                cl.m_PosScaleAndUScale.m_W          = uv_scale.m_X;
-                cl.m_PosTrasnlationAndVScale.m_X    = pos_center.m_X;
-                cl.m_PosTrasnlationAndVScale.m_Y    = pos_center.m_Y;
-                cl.m_PosTrasnlationAndVScale.m_Z    = pos_center.m_Z;
-                cl.m_PosTrasnlationAndVScale.m_W    = uv_scale.m_Y;
-                cl.m_UVTranslation.m_X              = uv_min.m_X;
-                cl.m_UVTranslation.m_Y              = uv_min.m_Y;
                 cl.m_iIndex                         = cluster_index_start;
                 cl.m_nIndices                       = static_cast<uint32_t>(c.tri_ids.size() * 3);
                 cl.m_iVertex                        = cluster_vert_start;
@@ -965,8 +969,8 @@ namespace xgeom_static_compiler
                     else                    c2.tri_ids.push_back(ti);
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
             }
         }
 
@@ -982,6 +986,7 @@ namespace xgeom_static_compiler
             std::vector<geom::cluster>          OutClusters;
             std::vector<geom::vertex>           OutAllStaticVerts;
             std::vector<geom::vertex_extras>    OutAllExtrasVerts;
+            std::vector<geom::cluster_data>     OutClusterData;
             std::vector<uint32_t>               OutAllIndices;
             BBox3                               OutGlobalBBox;
             std::uint16_t                       current_lod_idx         = 0;
@@ -1072,7 +1077,7 @@ namespace xgeom_static_compiler
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutAllIndices);
+                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
@@ -1125,18 +1130,22 @@ namespace xgeom_static_compiler
             constexpr std::size_t   vulkan_align    = 64; // Min for Vulkan buffers/UBO
             const std::size_t       VertexSize      = OutAllStaticVerts.size() * sizeof(geom::vertex);
             const std::size_t       ExtrasSize      = OutAllExtrasVerts.size() * sizeof(geom::vertex_extras);
-            const std::size_t       IndicesSize     = OutAllIndices.size() * sizeof(std::uint16_t);
+            const std::size_t       IndicesSize     = OutAllIndices.size()     * sizeof(std::uint16_t);
+            const std::size_t       ClusterDataSize = OutClusterData.size()    * sizeof(geom::cluster_data);
+
             std::size_t             current_offset  = 0;
 
-            result.m_VertexOffset           = align(current_offset, vulkan_align); current_offset = align(current_offset + VertexSize, vulkan_align);
-            result.m_VertexExtrasOffset     = current_offset; current_offset = align(current_offset + ExtrasSize, vulkan_align);
-            result.m_IndicesOffset          = current_offset; current_offset = align(current_offset + IndicesSize, vulkan_align);
+            result.m_VertexOffset           = current_offset; current_offset = align(current_offset + VertexSize,       vulkan_align);
+            result.m_VertexExtrasOffset     = current_offset; current_offset = align(current_offset + ExtrasSize,       vulkan_align);
+            result.m_IndicesOffset          = current_offset; current_offset = align(current_offset + IndicesSize,      vulkan_align);
+            result.m_ClusterDataOffset      = current_offset; current_offset = align(current_offset + ClusterDataSize,  vulkan_align);
             result.m_DataSize               = current_offset;
             result.m_pData                  = new char[result.m_DataSize];
 
             // Copy data into m_pData
             std::memcpy(result.m_pData + result.m_VertexOffset,         OutAllStaticVerts.data(), VertexSize);
             std::memcpy(result.m_pData + result.m_VertexExtrasOffset,   OutAllExtrasVerts.data(), ExtrasSize);
+            std::memcpy(result.m_pData + result.m_ClusterDataOffset,    OutClusterData.data(),    ClusterDataSize);
 
             // Copy the indices
             auto pIndex = reinterpret_cast<std::uint16_t*>(result.m_pData + result.m_IndicesOffset);
