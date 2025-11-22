@@ -57,8 +57,6 @@ layout(location = 0) out struct _o
     vec4 wSpacePosition;  // Position in small world
     vec4 ShadowPosition;  // Position in shadow texture-clip-space
     vec2 UV;              // Final texture coordinates
-
-    vec3 Normal;
 } Out;
 
 void main()
@@ -111,8 +109,6 @@ void main()
 
     // Tangent-to-world matrix (rotation only)
     Out.T2w = L2w_rot * mat3(Tangent, Binormal, Normal);
-
-    Out.Normal = Normal;
 }
 
 
