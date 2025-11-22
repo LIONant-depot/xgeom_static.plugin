@@ -13,12 +13,14 @@ layout(binding = 1) uniform sampler2D SamplerDiffuseMap;		// [INPUT_TEXTURE_DIFF
 
 layout(location = 0) in struct
 {
-	mat3  T2w;                          // Tangent space to w/small world (Rotation Only)
-	vec4  wSpacePosition;               // Vertex pos in w/"small world"
-	vec4  ShadowPosition;               // Vertex position in shadow space
-	vec2  UV;                           // Just your regular UVs
+	mat3 T2w;                          // Tangent space to w/small world (Rotation Only)
+	vec4 wSpacePosition;               // Vertex pos in w/"small world"
+	vec4 ShadowPosition;               // Vertex position in shadow space
+	vec2 UV;                           // Just your regular UVs
+	vec3 Normal;
 } In;
 
+/*
 layout(push_constant) uniform PushConsts
 {
 	vec4 posScaleAndUScale;         // .xyz = position scale, .w = U scale
@@ -32,6 +34,20 @@ layout(push_constant) uniform PushConsts
 //	vec4 wSpaceLightPos;
 //	vec4 wSpaceEyePos;
 } pushConsts;
+*/
+
+layout(set = 2, binding = 0) uniform MeshUniforms
+{
+	mat4 L2w;          // Local space -> camera-centered small world
+	mat4 w2C;          // Small world -> clip space (projection * view)
+	mat4 L2CShadow;    // Local space -> shadow clip space
+
+	vec4 LightColor;
+	vec4 AmbientLightColor;
+	vec4 wSpaceLightPos;
+	vec4 wSpaceEyePos;
+} mesh;
+
 
 layout(location = 0)   out         vec4        outFragColor;
 
@@ -75,6 +91,11 @@ float ShadowPCF(in const vec4 UVProjection)
 	return Shadow;
 }
 
+vec3 vec2col(vec3 V)
+{
+	return V*0.5 + 0.5;
+}
+
 //----------------------------------------------------------------------------------------
 
 void main()
@@ -82,16 +103,18 @@ void main()
 	const vec4  DiffuseColor = texture(SamplerDiffuseMap, In.UV);
 	const float Shadow       = ShadowPCF(In.ShadowPosition / In.ShadowPosition.w);
 
-	const vec3  FinalColor = (DiffuseColor.xyz - DiffuseColor.xyz * 0.5) * Shadow + DiffuseColor.xyz * 0.5;
+	vec3 wNormal	= In.Normal;//normalize(In.T2w * vec3(0,0,1));
+	vec3 wLightDir	= normalize(mesh.wSpaceLightPos.xyz - In.wSpacePosition.xyz);
+	float I = max(0,dot(wNormal, wLightDir));
 
-	outFragColor = vec4( FinalColor, DiffuseColor.a);
+	const vec3 FinalColor = (I * mesh.LightColor.rgb * Shadow + mesh.AmbientLightColor.rgb)* DiffuseColor.rgb;  //vec2col(wNormal);
+	//const vec3  FinalColor = Col;//(Col.xyz - Col.xyz * 0.5) * Shadow + Col.xyz * 0.5;
 
-/*
 	// Convert to gamma
-	const float Gamma = pushConsts.wSpaceEyePos.w;
-	outFragColor.a = DiffuseColor.a;
-	outFragColor.rgb = pow(outFragColor.rgb, vec3(1.0f / Gamma));
-*/
+	const float Gamma = 2.2; //pushConsts.wSpaceEyePos.w;
+	outFragColor.a = 1;
+	outFragColor.rgb = pow(FinalColor.rgb, vec3(1.0f / Gamma));
+
 
 
 /*

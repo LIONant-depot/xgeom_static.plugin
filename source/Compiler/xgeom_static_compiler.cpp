@@ -1295,10 +1295,18 @@ namespace xgeom_static_compiler
                     Rot.m_Pitch = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_X) };
                     Rot.m_Yaw   = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_Y) };
 
-                    xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
+                    const xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
+                    const xmath::fmat3 M2(Rot);
                     for (auto& E : m_RawGeom.m_Vertex )
                     {
                         E.m_Position = M * E.m_Position;
+
+                        for (int i=0; i<1; i++) 
+                        {
+                            E.m_BTN[i].m_Normal   = M2 * E.m_BTN[i].m_Normal;
+                            E.m_BTN[i].m_Binormal = M2 * E.m_BTN[i].m_Binormal;
+                            E.m_BTN[i].m_Tangent  = M2 * E.m_BTN[i].m_Tangent;
+                        }
                     }
 
                     displayProgressBar("PreTranslatingMeshes", 1);

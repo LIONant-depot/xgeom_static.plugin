@@ -7,8 +7,7 @@ vec3 oct_decode(vec2 e)
     vec3 v = vec3(e.xy, 1.0 - abs(e.x) - abs(e.y));
     if (v.z < 0.0)
     {
-        v.x = (1.0 - abs(v.y)) * sign(v.x);
-        v.y = (1.0 - abs(v.x)) * sign(v.y);
+        v.xy = (1.0 - abs(v.yx)) * sign(v.xy);
     }
     return normalize(v);
 }
@@ -19,6 +18,11 @@ layout(set=2, binding = 0) uniform MeshUniforms
     mat4 L2w;          // Local space -> camera-centered small world
     mat4 w2C;          // Small world -> clip space (projection * view)
     mat4 L2CShadow;    // Local space -> shadow clip space
+    vec4 LightColor;
+    vec4 AmbientLightColor;
+    vec4 wSpaceLightPos;
+    vec4 wSpaceEyePos;
+
 } mesh;
 
 // Cluster struct
@@ -53,6 +57,8 @@ layout(location = 0) out struct _o
     vec4 wSpacePosition;  // Position in small world
     vec4 ShadowPosition;  // Position in shadow texture-clip-space
     vec2 UV;              // Final texture coordinates
+
+    vec3 Normal;
 } Out;
 
 void main()
@@ -65,9 +71,9 @@ void main()
     const vec4 local_pos    = vec4(norm_pos * selectedCluster.posScale.xyz + selectedCluster.posTranslation.xyz, 1.0);
 
     // Transform to all needed spaces
-    Out.wSpacePosition      = mesh.L2w * local_pos;
+    Out.wSpacePosition      = mesh.L2w       * local_pos;
     Out.ShadowPosition      = mesh.L2CShadow * local_pos;
-    gl_Position             = mesh.w2C * Out.wSpacePosition;
+    gl_Position             = mesh.w2C       * Out.wSpacePosition;
 
     // Decode UV and apply cluster scaling/offset
     const vec2 norm_uv      = vec2(in_UV) / 65535.0;
@@ -105,7 +111,11 @@ void main()
 
     // Tangent-to-world matrix (rotation only)
     Out.T2w = L2w_rot * mat3(Tangent, Binormal, Normal);
+
+    Out.Normal = Normal;
 }
+
+
 /**** Old Push constant version
 #version 450
 
