@@ -40,13 +40,7 @@ namespace xgeom_static
             )
         };
 
-        int findMesh( std::string_view Name ) const noexcept
-        {
-            for ( auto& E : m_MeshList )
-                if ( E.m_Name == Name ) return static_cast<int>(&E - m_MeshList.data());
-
-            return -1;
-        }
+        using node_path = std::vector<std::string>;
 
         int findMaterial(std::string_view Name) const noexcept
         {
@@ -54,6 +48,96 @@ namespace xgeom_static
                 if (E == Name) return static_cast<int>(&E - m_MaterialList.data());
             return -1;
         }
+
+
+        static bool CompareNodePaths(const node_path& A, const node_path& B)
+        {
+            if (A.size() != B.size()) return false;
+            if (A.empty() && B.empty()) return false;
+
+            for (int i = 0; i < A.size(); ++i)
+            {
+                if (A[i] != B[i]) return false;
+            }
+
+            return true;
+        }
+
+        /*
+        std::pair<const node*, const node*> findNode( std::span<const std::string> NodePath, const node* pNode = nullptr, const node* pParent = nullptr ) const noexcept
+        {
+            if (pNode == nullptr) pNode = &m_RootNode;
+            if (pNode->m_Name == NodePath[0] ) return {pNode, pParent};
+            if( NodePath.size() == 1) return{};
+
+            for( auto& n : pNode->m_Children )
+            {
+                auto Pair = findNode(std::span(NodePath).subspan(1), &n, pNode);
+                if (Pair.first) return Pair;
+            }
+
+            return {};
+        }
+        */
+
+        std::pair<const node*, const node*> findNode(std::span<const std::string> NodePath) const noexcept
+        {
+            if ( NodePath.empty() ) return {};
+            if (NodePath.size() == 1 && NodePath[0] == m_RootNode.m_Name) return {&m_RootNode, nullptr};
+            if (NodePath[0] != m_RootNode.m_Name) return {};
+
+            int Index=1;
+            const node* pParent = &m_RootNode;
+            do
+            {
+                bool bFound = false;
+                for (const node& Node : pParent->m_Children)
+                {
+                    if (Node.m_Name == NodePath[Index])
+                    {
+                        Index++;
+                        if (Index == NodePath.size())
+                            return{ &Node, pParent };
+
+                        // Otherwise just keep searching
+                        pParent = &Node;
+                        bFound = true;
+                        break;
+                    }
+                }
+
+                if (bFound==false) break;
+
+            } while( Index < NodePath.size() );
+
+            return {};
+        }
+
+        std::pair<const node*, int>  findMesh(std::span<const std::string> NodePath, std::string_view MeshName) const noexcept
+        {
+            auto Pair = findNode(NodePath);
+            if (Pair.first == nullptr) return {};
+
+            for (auto mi : Pair.first->m_MeshList)
+            {
+                if ( m_MeshList[mi].m_Name == MeshName )
+                    return { Pair.first, mi };
+            }
+
+            return {};
+        }
+
+        int findMesh(std::string_view MeshName) const noexcept
+        {
+            for (auto& m : m_MeshList)
+            {
+                if (m.m_Name == MeshName)
+                    return static_cast<int>(&m - m_MeshList.data());
+            }
+
+            return -1;
+        }
+
 
         std::vector<mesh>           m_MeshList;
         std::vector<std::string>    m_MaterialList;
