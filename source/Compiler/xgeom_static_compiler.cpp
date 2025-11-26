@@ -827,7 +827,7 @@ void ConvertToCompilerMesh(void)
                     std::unordered_set<int> olds;
                     for (const auto& np : group.m_NodePathList)
                     {
-                        std::string prefix = xgeom_static::NodePathToString(np) + "/";
+                        std::string prefix = np + "/";
                         for (int i = 0; i < static_cast<int>(Geom.m_Mesh.size()); ++i)
                         {
                             if (Geom.m_Mesh[i].m_ScenePath.starts_with(prefix))
@@ -870,7 +870,7 @@ void ConvertToCompilerMesh(void)
 
                 for (const auto& um : Descriptor.m_UngroupMeshList)
                 {
-                    std::string fullName = xgeom_static::NodePathToString(um.m_NodePath) + "/" + um.m_MeshName;
+                    std::string fullName = um.m_NodePath + "/" + um.m_MeshName;
                     int idx = Geom.findMeshByPath(fullName);
                     if (idx != -1)
                     {
@@ -884,7 +884,6 @@ void ConvertToCompilerMesh(void)
             }
         }
 
-
         //--------------------------------------------------------------------------------------
 
         void MergeMeshes()
@@ -893,20 +892,23 @@ void ConvertToCompilerMesh(void)
             // Delete all the unwanted meshes
             //
             {
-                xgeom_static::node_path Path;
+                std::vector<std::string> Path;
                 std::function<void(const xgeom_static::details::node&, bool)> Recursive = [&](const xgeom_static::details::node& Node, bool bDelete )
                 {
-                    Path.push_back(Node.m_Name);
+                    if (Path.empty()) Path.push_back(Node.m_Name);
+                    else              Path.push_back( std::format("{}/{}", Path.back(), Node.m_Name ));
+
                     if ( bDelete == false )
                     {
-                        if (m_Descriptor.isNodeInDeleteList(Path)) bDelete = true;
+                        if (m_Descriptor.isNodeInDeleteList(Path.back())) 
+                            bDelete = true;
                     }
 
                     for (auto idx : Node.m_MeshList)
                     {
-                        if (bDelete || m_Descriptor.isMeshInDeleteList(Path, m_Details.m_MeshList[idx].m_Name))
+                        if (bDelete || m_Descriptor.isMeshInDeleteList(Path.back(), m_Details.m_MeshList[idx].m_Name))
                         {
-                            std::string PathStr = std::format("{}/{}", xgeom_static::NodePathToString(Path), m_Details.m_MeshList[idx].m_Name);
+                            std::string PathStr = std::format("{}/{}", Path.back(), m_Details.m_MeshList[idx].m_Name);
                             int         iRawMesh = m_RawGeom.findMeshByPath(PathStr);
                             if (iRawMesh != -1)
                             {
@@ -922,6 +924,7 @@ void ConvertToCompilerMesh(void)
                     {
                         Recursive(n, bDelete);
                     }
+
                     Path.pop_back();
                 };
 
