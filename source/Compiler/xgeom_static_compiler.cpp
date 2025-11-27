@@ -387,6 +387,20 @@ void ConvertToCompilerMesh(void)
             std::vector<uint32_t> tri_ids;
         };
 
+        static xmath::fvec3 oct_decode(xmath::fvec2 e)
+        {
+            e = e * 2.0f - 1.0f;                          // [0,1] -> [-1,1]
+            xmath::fvec3 v(e.m_X, e.m_Y, 1.0f - std::abs(e.m_X) - std::abs(e.m_Y));
+            if (v.m_Z < 0.0f)
+            {
+                float temp_x = v.m_X;
+                float temp_y = v.m_Y;
+                v.m_X = (1.0f - std::abs(temp_y)) * (temp_x >= 0.0f ? 1.0f : -1.0f);
+                v.m_Y = (1.0f - std::abs(temp_x)) * (temp_y >= 0.0f ? 1.0f : -1.0f);
+            }
+            return v.NormalizeSafe();
+        }
+
         //--------------------------------------------------------------------------------------
 
         static void RecurseClusterSplit
@@ -493,31 +507,63 @@ void ConvertToCompilerMesh(void)
                 std::vector<geom::vertex_extras>    original_extras(new_vert_ids.size());
                 for (uint32_t i = 0; i < new_vert_ids.size(); ++i)
                 {
-                    const uint32_t  ov          = new_vert_ids[i];
-                    const vertex&   v           = InputVerts[ov];
-                    const float     sign_val    = BinormalSigns[ov];
-                    const int       sign_bit    = (sign_val < 0.0f ? 1 : 0);
+                    const uint32_t  ov = new_vert_ids[i];
+                    const vertex& v = InputVerts[ov];
+                    const float     sign_val = BinormalSigns[ov];
+                    const uint32_t  sign_bit = (sign_val < 0.0f ? 1u : 0u);
 
                     // Pos compression
                     const auto pos = ((v.m_Position - pos_center) / pos_scale + 1.0f) * 32767.5f - 32768.0f;
-                    original_static[i].m_XPos   = static_cast<int16_t>(std::round(pos.m_X));
-                    original_static[i].m_YPos   = static_cast<int16_t>(std::round(pos.m_Y));
-                    original_static[i].m_ZPos   = static_cast<int16_t>(std::round(pos.m_Z));
-                    original_static[i].m_Extra  = static_cast<uint16_t>(sign_bit);
+                    original_static[i].m_XPos = static_cast<int16_t>(std::round(pos.m_X));
+                    original_static[i].m_YPos = static_cast<int16_t>(std::round(pos.m_Y));
+                    original_static[i].m_ZPos = static_cast<int16_t>(std::round(pos.m_Z));
 
                     // UV
                     const auto norm_uv = (v.m_UVs[0] - uv_min) / uv_scale;
                     original_extras[i].m_UV[0] = static_cast<uint16_t>(std::round(norm_uv.m_X * 65535.0f));
                     original_extras[i].m_UV[1] = static_cast<uint16_t>(std::round(norm_uv.m_Y * 65535.0f));
 
-                    // Oct normal/tangent (UNORM8)
-                    const auto oct_n = oct_encode(v.m_Normal.NormalizeSafeCopy());
-                    original_extras[i].m_OctNormal[0] = static_cast<uint8_t>(std::round((oct_n.m_X * 0.5f + 0.5f) * 255.0f));
-                    original_extras[i].m_OctNormal[1] = static_cast<uint8_t>(std::round((oct_n.m_Y * 0.5f + 0.5f) * 255.0f));
+                    // Oct normal (12 bits each)
+                    const auto      oct_n   = oct_encode(v.m_Normal.NormalizeSafeCopy());
+                    const uint32_t  n_x     = static_cast<uint32_t>(std::round((oct_n.m_X * 0.5f + 0.5f) * 4095.0f));
+                    const uint32_t  n_y     = static_cast<uint32_t>(std::round((oct_n.m_Y * 0.5f + 0.5f) * 4095.0f));
 
-                    const auto oct_t = oct_encode(v.m_Tangent.NormalizeSafeCopy());
-                    original_extras[i].m_OctTangent[0] = static_cast<uint8_t>(std::round((oct_t.m_X * 0.5f + 0.5f) * 255.0f));
-                    original_extras[i].m_OctTangent[1] = static_cast<uint8_t>(std::round((oct_t.m_Y * 0.5f + 0.5f) * 255.0f));
+                    // Oct tangent (12/11 bits)
+                    const auto      oct_t   = oct_encode(v.m_Tangent.NormalizeSafeCopy());
+                    const uint32_t  t_x     = static_cast<uint32_t>(std::round((oct_t.m_X * 0.5f + 0.5f) * 4095.0f));
+                    const uint32_t  t_y     = static_cast<uint32_t>(std::round((oct_t.m_Y * 0.5f + 0.5f) * 2047.0f));
+
+                    // High bits (assuming m_OctNormal is uint8_t[4]: [0]=N_x high, [1]=N_y high, [0]=T_x high, [1]=T_y high)
+                    original_extras[i].m_OctNormal[0]  = static_cast<uint8_t>(n_x >> 4);
+                    original_extras[i].m_OctNormal[1]  = static_cast<uint8_t>(n_y >> 4);
+                    original_extras[i].m_OctTangent[0] = static_cast<uint8_t>(t_x >> 4);
+                    original_extras[i].m_OctTangent[1] = static_cast<uint8_t>(t_y >> 3);
+
+                    // Low bits + sign to extra (uint16_t)
+                    uint16_t extra_bits = 0u;
+                    extra_bits |= ((n_x & 0xFu) << 0);         // 0-3: N_x low
+                    extra_bits |= ((n_y & 0xFu) << 4);         // 4-7: N_y low
+                    extra_bits |= ((t_x & 0xFu) << 8);         // 8-11: T_x low
+                    extra_bits |= ((t_y & 0x7u) << 12);        // 12-14: T_y low
+                    extra_bits |= (sign_bit << 15);            // 15: sign
+                    original_static[i].m_Extra = extra_bits;
+
+                    //SANITY CHECK: Decode normal (shader-equivalent)
+                    if (false)
+                    {
+                        uint32_t high_nx = static_cast<uint32_t>(original_extras[i].m_OctNormal[0]) << 4;
+                        uint32_t high_ny = static_cast<uint32_t>(original_extras[i].m_OctNormal[1]) << 4;
+                        uint32_t low_nx = (extra_bits >> 0) & 0xFu;
+                        uint32_t low_ny = (extra_bits >> 4) & 0xFu;
+                        uint32_t combined_nx = high_nx | low_nx;
+                        uint32_t combined_ny = high_ny | low_ny;
+                        xmath::fvec2 enc_normal(static_cast<float>(combined_nx) / 4095.0f, static_cast<float>(combined_ny) / 4095.0f);
+                        xmath::fvec3 decoded_normal = oct_decode(enc_normal);  
+
+                        xmath::fvec3 orig_normal = v.m_Normal.NormalizeSafeCopy();
+                        float error = (decoded_normal - orig_normal).Length();
+                        assert(error < 0.01f);
+                    }
                 }
 
                 // Remap vertices and extras
@@ -982,12 +1028,9 @@ void ConvertToCompilerMesh(void)
                     {
                         E.m_Position = M * E.m_Position;
 
-                        for (int i=0; i<1; i++) 
-                        {
-                            E.m_BTN[i].m_Normal   = M2 * E.m_BTN[i].m_Normal;
-                            E.m_BTN[i].m_Binormal = M2 * E.m_BTN[i].m_Binormal;
-                            E.m_BTN[i].m_Tangent  = M2 * E.m_BTN[i].m_Tangent;
-                        }
+                        E.m_BTN[0].m_Normal   = M2 * E.m_BTN[0].m_Normal;
+                        E.m_BTN[0].m_Binormal = M2 * E.m_BTN[0].m_Binormal;
+                        E.m_BTN[0].m_Tangent  = M2 * E.m_BTN[0].m_Tangent;
                     }
 
                     displayProgressBar("PreTranslatingMeshes", 1);
@@ -1001,9 +1044,9 @@ void ConvertToCompilerMesh(void)
                     for (auto& V : m_RawGeom.m_Vertex)
                     {
                         V.m_nUVs        = 1;
-                        V.m_nNormals    = 1;
-                        V.m_nTangents   = 1;
-                        V.m_nBinormals  = 1;
+                        assert(V.m_nNormals    == 1);
+                        assert(V.m_nTangents   == 1);
+                        assert(V.m_nBinormals  == 1);
                         V.m_nColors     = 0;
                     }
                 }
@@ -1011,10 +1054,13 @@ void ConvertToCompilerMesh(void)
                 //
                 // Clean the mesh
                 //
-                displayProgressBar("Cleaning up Geom", 1);
-                m_RawGeom.CleanMesh();
-                m_RawGeom.SortFacetsByMeshMaterialBone();
-                displayProgressBar("Cleaning up Geom", 1);
+                {
+                    displayProgressBar("Cleaning up Geom", 1);
+                    //m_RawGeom.CollapseNormals();
+                    m_RawGeom.CleanMesh();
+                    m_RawGeom.SortFacetsByMeshMaterialBone();
+                    displayProgressBar("Cleaning up Geom", 1);
+                }
 
                 //
                 // Convert to mesh
