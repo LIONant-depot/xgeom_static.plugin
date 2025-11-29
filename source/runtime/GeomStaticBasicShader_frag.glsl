@@ -8,7 +8,6 @@ layout(binding = 1) uniform sampler2D SamplerDiffuseMap;		// [INPUT_TEXTURE_DIFF
 
 layout(location = 0) out vec4 outFragColor;
 
-
 void main()
 {
 	vec3 FinalColor = PBRLighting
@@ -18,6 +17,7 @@ void main()
 	, vec3(0.04)
 	, 0.8
 	, 0
+	, 1
 	);
 
 	//
