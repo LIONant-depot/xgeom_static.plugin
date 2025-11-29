@@ -8,7 +8,7 @@ layout(set=2, binding = 0) uniform MeshUniforms
 {
     mat4 L2w;          // Local space -> camera-centered small world
     mat4 w2C;          // Small world -> clip space (projection * view)
-    mat4 L2CShadow;    // Local space -> shadow clip space
+    mat4 L2CShadowT;   // Local space -> shadow texture space
     vec4 LightColor;
     vec4 AmbientLightColor;
     vec4 wSpaceLightPos;
@@ -34,9 +34,9 @@ void main()
     //
     // Transform to all needed spaces
     //
-    Out.wSpacePosition      = mesh.L2w       * VertData.LocalPos;
-    Out.ShadowPosition      = mesh.L2CShadow * VertData.LocalPos;
-    gl_Position             = mesh.w2C       * Out.wSpacePosition;
+    Out.wSpacePosition      = mesh.L2w        * VertData.LocalPos;
+    Out.ShadowPosition      = mesh.L2CShadowT * VertData.LocalPos;
+    gl_Position             = mesh.w2C        * Out.wSpacePosition;
 
     //
     // Set the UVs
