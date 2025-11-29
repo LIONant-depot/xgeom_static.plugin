@@ -9,11 +9,6 @@ layout(set=2, binding = 0) uniform MeshUniforms
     mat4 L2w;          // Local space -> camera-centered small world
     mat4 w2C;          // Small world -> clip space (projection * view)
     mat4 L2CShadowT;   // Local space -> shadow texture space
-    vec4 LightColor;
-    vec4 AmbientLightColor;
-    vec4 wSpaceLightPos;
-    vec4 wSpaceEyePos;
-
 } mesh;
 
 
