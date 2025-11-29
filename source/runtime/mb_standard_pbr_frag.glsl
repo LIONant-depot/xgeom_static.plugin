@@ -15,7 +15,7 @@
 //						high(0.7 - 1) for matte(diffuse - like). Clamp min 0.045 to avoid artifacts.
 // inMetalic		: Metalness(0 - 1). 0 for dielectrics(diffuse from albedo); 
 //						1 for metals(no diffuse, albedo tints specular). Avoid intermediates unless blending(e.g., rust).
-// inRetroReflectivity: Scalar (0-2) to tune grazing retro-reflection in diffuse (1.0 standard; higher for fabrics/skin).
+// inEmissiveColor	: Self-illumination color (RGB, 0-1+ for HDR glow). Adds unshaded light; use maps for detail (e.g., neon/glow effects).
 // 
 //-------------------------------------------------------------------------------------------
 // Uniform Setup(lighting_uniforms)
@@ -142,12 +142,11 @@ float VisibilitySmithCorrelated(float NdotV, float NdotL, float alpha)
 	return 0.5 / (GGXV + GGXL + 1e-6);
 }
 
-// Burley Diffuse (Disney 2012/2015): Energy-conserving with tunable retro-reflection for rough surfaces.
-// FD90 tuned by inRetroReflectivity: Scales the retro term (1.0 standard; 0.0 no retro, >1.0 enhanced for fabrics/skin).
-// Provides artist control over grazing response (5-15% brighter edges); low perf cost.
-float DiffuseBurley(float NdotV, float NdotL, float LdotH, float roughness, float retroReflectivity) 
+// Burley Diffuse (Disney 2012/2015): Energy-conserving with roughness-derived retro-reflection for rough surfaces.
+// FD90 derived from roughness: Standard calculation for dynamic grazing response.
+float DiffuseBurley(float NdotV, float NdotL, float LdotH, float roughness) 
 {
-	float FD90 = 0.5 + retroReflectivity * 2.0 * LdotH * LdotH * roughness;
+	float FD90 = 0.5 + 2.0 * LdotH * LdotH * roughness;
 	float lightScatter = (1.0 + (FD90 - 1.0) * Pow5(1.0 - NdotL));
 	float viewScatter = (1.0 + (FD90 - 1.0) * Pow5(1.0 - NdotV));
 	return lightScatter * viewScatter * (1.0 / PI);
@@ -183,10 +182,10 @@ vec3 PBRLighting
 , in const vec3  inSpecularColor
 , in const float inRoughness
 , in const float inMetalic
-, in const float inRetroReflectivity
+, in const vec3  inEmissiveColor
 )
 {
-	// Ambient baseline: Compute always—cheap; 2025 grazing approx for subtle IBL hack (neural-inspired, no cubemap).
+// Ambient baseline: Compute always—cheap; 2025 grazing approx for subtle IBL hack (neural-inspired, no cubemap).
 	vec3	N					= normalize(In.T2w * inNormal);
 	vec3	V					= normalize(UBOLight.wSpaceEyePos.xyz - In.wSpacePosition.xyz);
 	float	NdotV				= saturate(dot(N, V));
@@ -196,22 +195,17 @@ vec3 PBRLighting
 	vec3	ambientSpec			= F_grazing * UBOLight.AmbientLightColor.rgb * inAO * (1.0 - inRoughness) * 0.04;
 	vec3	ambient				= ambientDiffuse + ambientSpec;
 
-	// Early shadow PCF: Texture-bound, cull if full umbra (coherent branch wins per 2025 stochastic talks).
+	// Early culls: Compute minimal for combined check (cheap ops, low divergence risk).
 	float Shadow = ShadowPCF(In.ShadowPosition / In.ShadowPosition.w);
-	if (Shadow < 1e-4) return ambient;
-
-	// Distance/radius cull: Finite falloff explicit; skip math if negligible (2025 perf focus).
 	vec3    lightVec			= UBOLight.wSpaceLightPos.xyz - In.wSpacePosition.xyz;
 	float   distance			= length(lightVec);
 	float   radius				= UBOLight.wSpaceLightPos.w;
-	//float   att					= 1.0; // Temporarily disable attenuation for debugging
 	float   att					= Attenuate(distance, radius);
-
-	// Commit to lit path: Vectors/dots only here.
 	vec3	L					= lightVec / distance;
 	float	NdotL				= saturate(dot(N, L));
-	if (NdotL < 1e-4 || att < 1e-4) return ambient;
+	if (Shadow < 1e-4 || att < 1e-4 || NdotL < 1e-4) return ambient + inEmissiveColor;
 
+	// Commit to lit path: Rest here.
 	vec3	H					= normalize(V + L);
 	float	NdotH				= saturate(dot(N, H));
 	float	LdotH				= saturate(dot(L, H));
@@ -231,12 +225,12 @@ vec3 PBRLighting
 	specular *= multiScatter;
 
 	vec3	kD					= (vec3(1.0) - F) * (1.0 - inMetalic);
-	float	diffuseFactor		= DiffuseBurley(NdotV, NdotL, LdotH, perceptualRoughness, inRetroReflectivity);
+	float	diffuseFactor		= DiffuseBurley(NdotV, NdotL, LdotH, perceptualRoughness);
 	vec3	diffuse				= kD * inAlbedo * diffuseFactor;
 
 	vec3	lightTint			= BlackbodyTint(UBOLight.LightParams.y); // Apply temperature shift
 	vec3	radiance			= UBOLight.LightColor.rgb * lightTint * att * UBOLight.LightParams.z; // Apply intensity mult
 	vec3	directLighting		= (diffuse + specular) * radiance * NdotL * Shadow;
 
-	return ambient + directLighting;
+	return ambient + directLighting + inEmissiveColor;
 }
