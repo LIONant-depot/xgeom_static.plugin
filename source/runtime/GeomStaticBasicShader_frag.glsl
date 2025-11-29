@@ -3,10 +3,14 @@
 #extension GL_ARB_shading_language_420pack : enable
 
 #include "mb_standard_pbr_frag.glsl"
+#include "md_tone_mapper_lion.glsl"
 
 layout(binding = 1) uniform sampler2D SamplerDiffuseMap;		// [INPUT_TEXTURE_DIFFUSE]
 
 layout(location = 0) out vec4 outFragColor;
+
+
+
 
 void main()
 {
@@ -24,7 +28,11 @@ void main()
 	// Tone map from (HDR) to (LDR) before gamma correction
 	// Has a blue tint 
 	//
-	FinalColor.rgb = FinalColor.rgb / (FinalColor.rgb + vec3(1));//vec3(1.0, 1.0, 0.9));
+///FinalColor.rgb = FinalColor.rgb / (FinalColor.rgb + vec3(1));//vec3(1.0, 1.0, 0.9));
+
+	//FinalColor = ToneMapper_pbrNeutral(FinalColor);
+
+	FinalColor = ToneMapper_lion(FinalColor, 1.0 );
 
 	// Convert to gamma
 	const float Gamma = 2.2; //pushConsts.wSpaceEyePos.w;
