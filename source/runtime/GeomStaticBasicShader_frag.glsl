@@ -14,13 +14,13 @@ layout(location = 0) in struct
 	vec2 UV;                           // Just your regular UVs
 } In;
 
-layout(set = 2, binding = 1) uniform MeshUniforms
+layout(set = 2, binding = 1) uniform lighting_uniforms
 {
 	vec4 LightColor;
 	vec4 AmbientLightColor;
 	vec4 wSpaceLightPos;
 	vec4 wSpaceEyePos;
-} mesh;
+} LightingUniforns;
 
 layout(location = 0) out vec4 outFragColor;
 
@@ -31,10 +31,10 @@ void main()
 	const float Shadow = ShadowPCF(In.ShadowPosition / In.ShadowPosition.w);
 
 	vec3 wNormal = normalize(In.T2w * vec3(0, 0, 1));
-	vec3 wLightDir = normalize(mesh.wSpaceLightPos.xyz - In.wSpacePosition.xyz);
+	vec3 wLightDir = normalize(LightingUniforns.wSpaceLightPos.xyz - In.wSpacePosition.xyz);
 	float I = max(0, dot(wNormal, wLightDir));
 
-	const vec3 FinalColor = (I * mesh.LightColor.rgb * Shadow + mesh.AmbientLightColor.rgb) * DiffuseColor.rgb;  //vec2col(wNormal);
+	const vec3 FinalColor = (I * LightingUniforns.LightColor.rgb * Shadow + LightingUniforns.AmbientLightColor.rgb) * DiffuseColor.rgb;  //vec2col(wNormal);
 
 	// Convert to gamma
 	const float Gamma = 2.2; //pushConsts.wSpaceEyePos.w;
