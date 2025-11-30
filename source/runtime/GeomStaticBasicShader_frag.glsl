@@ -14,7 +14,7 @@ void main()
 	( vec3(0, 0, 1)
 	, texture(SamplerDiffuseMap, In.UV).rgb
 	, 1
-	, vec3(0.04)
+	, 0.04
 	, 0.8
 	, 0
 	, vec3(0)

@@ -5,7 +5,7 @@
 #include "Cache/Plugins/xgeom_static/Runtime/mb_standard_pbr_frag.glsl"
 #include "Cache/Plugins/xgeom_static/Runtime/md_tone_mapper_lion.glsl"
 
-layout(binding = 0) uniform sampler2D SamplerShadowMap;        // [INPUT_TEXTURE_100]	// depth system dependent
+//layout(binding = 0) uniform sampler2D SamplerShadowMap;        // [INPUT_TEXTURE_100]	// depth system dependent
 layout(binding = 1) uniform sampler2D SamplerNormal;           // [INPUT_TEXTURE_110]	// liniar BC5 Tangent space normal
 layout(binding = 2) uniform sampler2D SamplerAlbedo;           // [INPUT_TEXTURE_120]	// SRGB decompress by Vulkan, BC1/BC7 albedo
 layout(binding = 3) uniform sampler2D SamplerORM;              // [INPUT_TEXTURE_130]	// liniar BC1/BC7 ORM packing (AO in R, Roughness in G, Metalness in B)
@@ -24,14 +24,14 @@ void main()
 {
 	vec3 ORM = texture(SamplerORM, In.UV).rgb
 	vec3 FinalColor = PBRLighting
-	(vec3(0, 0, 1)
-		, texture(SamplerAlbedo, In.UV).rgb
-		, ORM.r
-		, getBC5Normal(In.UV)
-		, vec3(0.04)					// No texture for now...
-		, ORM.g
-		, ORM.b
-		, texture(SamplerEmmisive, In.UV).rgb
+	( getBC5Normal(In.UV))
+	, texture(SamplerAlbedo, In.UV).rgb
+	, ORM.r
+	, getBC5Normal(In.UV)
+	, vec3(0.04)					// No texture for now...
+	, ORM.g
+	, ORM.b
+	, texture(SamplerEmmisive, In.UV).rgb
 	);
 	FinalColor = ToneMapper_lion(FinalColor, 1.0);
 	const float Gamma = 2.2;

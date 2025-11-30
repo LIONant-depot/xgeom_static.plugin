@@ -9,8 +9,8 @@
 // inAlbedo			: Base color(linear RGB, 0 - 1).For dielectrics, it's diffuse; for metals, specular tint. 
 //						Linearize sRGB textures: pow(texture(albedoMap, UV).rgb, 2.2). Avoid pure black/white for realism.
 // inAO				: Ambient occlusion(0 - 1, typically from AO map).Multiplies ambient; bake or use SSAO for dynamic.
-// inSpecularColor	: Dielectric base reflectance(vec3(0.02 - 0.08) linear, e.g., 0.04 for plastics / water). 
-//						Higher values unphysical for non - metals; use 0.04 default.
+// inF0				: Dielectric base reflectance (0.02-0.08 linear, e.g., 0.04 for plastics/water). 
+//						Higher values unphysical for non-metals; use 0.04 default.
 // inRoughness		: Perceptual roughness(0 - 1). Low(0 - 0.3) for shiny(sharp highlights); 
 //						high(0.7 - 1) for matte(diffuse - like). Clamp min 0.045 to avoid artifacts.
 // inMetalic		: Metalness(0 - 1). 0 for dielectrics(diffuse from albedo); 
@@ -179,18 +179,19 @@ vec3 PBRLighting
 ( in const vec3  inNormal
 , in const vec3  inAlbedo
 , in const float inAO
-, in const vec3  inSpecularColor
+, in const float inF0
 , in const float inRoughness
 , in const float inMetalic
 , in const vec3  inEmissiveColor
 )
 {
-// Ambient baseline: Compute always—cheap; 2025 grazing approx for subtle IBL hack (neural-inspired, no cubemap).
+	// Ambient baseline: Compute always—cheap; 2025 grazing approx for subtle IBL hack (neural-inspired, no cubemap).
+	vec3	emissive			= inEmissiveColor * inAO; // Modulate early for occlusion
 	vec3	N					= normalize(In.T2w * inNormal);
 	vec3	V					= normalize(UBOLight.wSpaceEyePos.xyz - In.wSpacePosition.xyz);
 	float	NdotV				= saturate(dot(N, V));
 	vec3	ambientDiffuse		= (1.0 - inMetalic) * inAlbedo * UBOLight.AmbientLightColor.rgb * inAO / PI;
-	vec3	F0					= mix(inSpecularColor, inAlbedo, inMetalic);
+	vec3	F0					= mix(vec3(inF0), inAlbedo, inMetalic);
 	vec3	F_grazing			= FresnelSchlick(0.0, F0);
 	vec3	ambientSpec			= F_grazing * UBOLight.AmbientLightColor.rgb * inAO * (1.0 - inRoughness) * 0.04;
 	vec3	ambient				= ambientDiffuse + ambientSpec;
@@ -203,7 +204,7 @@ vec3 PBRLighting
 	float   att					= Attenuate(distance, radius);
 	vec3	L					= lightVec / distance;
 	float	NdotL				= saturate(dot(N, L));
-	if (Shadow < 1e-4 || att < 1e-4 || NdotL < 1e-4) return ambient + inEmissiveColor;
+	if (Shadow < 1e-4 || att < 1e-4 || NdotL < 1e-4) return ambient + emissive;
 
 	// Commit to lit path: Rest here.
 	vec3	H					= normalize(V + L);
@@ -232,5 +233,5 @@ vec3 PBRLighting
 	vec3	radiance			= UBOLight.LightColor.rgb * lightTint * att * UBOLight.LightParams.z; // Apply intensity mult
 	vec3	directLighting		= (diffuse + specular) * radiance * NdotL * Shadow;
 
-	return ambient + directLighting + inEmissiveColor;
+	return ambient + directLighting + emissive;
 }
