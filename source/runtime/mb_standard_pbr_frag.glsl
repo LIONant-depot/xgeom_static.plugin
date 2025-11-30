@@ -27,17 +27,7 @@
 // wSpaceLightPos	: XYZ position, W radius(> 0 for finite falloff, 0 for infinite 1 / dist²). 
 //						Set radius to bbox extent for soft decay; prevents harsh infinite - range lighting.
 // wSpaceEyePos		: Camera position(must be accurate; vec4(0) causes invalid V vector and black artifacts).
-// LightParams		:   .x = area radius (0-1+ for specular/soft shadow approx, soften highlights 10-20% realism),
-//							(area radius) approximates a finite-sized spherical light source, softening specular highlights 
-//							(via increased effective roughness/alpha in GGX) and potentially shadows (e.g., via PCF bias scaling)
-//							In constranst with Falloff(via wSpaceLightPos.w) is pure distance - based attenuation(e.g., quadratic decay to zero at radius), 
-//							controlling intensity drop - off for energy conservation, unrelated to highlight / shadow softness.
-//							Difference: Area radius affects BRDF shape(specular blur / soft edges); 
-//							falloff modulates overall radiance magnitude over distance.Use area for visual softness, falloff for range limiting.
-//							Falloff radius (attenuation range) and area radius (light size approximation) serve distinct purposes: 
-//							falloff controls intensity decay to zero, while area softens specular highlights/shadows via effective roughness scaling. 
-//							Linking them (e.g., area = 0.1 * falloff) is possible for simplicity in point-like lights but suboptimal—separate params offer flexibility 
-//							(e.g., distant large lights need big falloff, small area; close soft lights need small falloff, large area). Keep separate for production realism.
+// LightParams		: .x = area radius (0-1+ for specular/soft shadow approx, soften highlights 10-20% realism),
 //						.y = temperature (Kelvin, e.g., 6500 for daylight; shifts LightColor via blackbody),
 //						.z = intensity multiplier (1.0 default; scales final radiance),
 //						.w = spare (unused, for future extensions).
@@ -48,7 +38,7 @@
 // Workflow			: Metallic - roughness(glTF standard).Test with PBR spheres(e.g., albedo white, roughness gradient) 
 //						to validate energy conservation(no darkening at edges).
 // Realism Tips		: For metals, set metallic = 1, roughness low, albedo metallic hue(e.g., gold vec3(1, 0.76, 0.34)).
-//						For dielectrics, metallic = 0, specular = 0.04. Use roughness maps for variation(e.g., scratches).
+//						For dielectrics, metallic = 0, F0 = 0.04. Use roughness maps for variation(e.g., scratches).
 // Integration		: Linear color space required; apply tonemap(Reinhard: color / (color + 1)) and gamma(pow(1 / 2.2)) 
 //						post - shader. Enable HDR for > 1 values.ShadowPCF assumes valid shadow map; debug with Shadow = 1.0.
 // Performance		: Early culls(shadow / NdotL / att) save 30 - 50 % in dark / far areas—profile with GPU tools.
@@ -59,6 +49,7 @@
 //						Intensity scales with scene units(1m = 1 unit assumed).
 // 
 //-------------------------------------------------------------------------------------------
+
 #include "mb_standard_shadow_frag.glsl"
 
 layout(location = 0) in struct
@@ -83,6 +74,9 @@ layout(set = 2, binding = 1) uniform lighting_uniforms
 //-------------------------------------------------------------------------------------------
 
 const float PI				= 3.14159265359;
+const float RCPPI			= 1.0 / PI;
+const float CONSTANT1_FON	= 0.5 - 2.0 / (3.0 * PI);
+const float CONSTANT2_FON	= 2.0 / 3.0 - 28.0 / (15.0 * PI);
 const float MIN_ROUGHNESS	= 0.045; // Avoid singularities (e.g., mirror artifacts)
 
 //-------------------------------------------------------------------------------------------
@@ -97,19 +91,15 @@ float Pow5(float x) { float x2 = x * x; return x2 * x2 * x; }
 //-------------------------------------------------------------------------------------------
 // Approximates Planck's law for temperature-based tint (e.g., 6500K daylight). Low perf cost; shifts LightColor.
 // Based on simplified CIE XYZ to RGB; temp 0 disables (neutral).
-vec3 BlackbodyTint(float temp) 
-{
+vec3 BlackbodyTint(float temp) {
 	if (temp <= 0.0) return vec3(1.0);
 	temp /= 100.0;
 	vec3 color;
-	if (temp <= 66.0) 
-	{
+	if (temp <= 66.0) {
 		color.r = 1.0;
 		color.g = saturate(0.39008157876901960784 * log(temp) - 0.63184144378862745098);
 		color.b = (temp <= 19.0) ? 0.0 : saturate(0.54320678911019607843 * log(temp - 10.0) - 1.19625408914);
-	} 
-	else 
-	{
+	} else {
 		color.r = saturate(1.29293618606274509804 * pow(temp - 60.0, -0.1332047592));
 		color.g = saturate(1.12989086089529411765 * pow(temp - 60.0, -0.07551484999));
 		color.b = 1.0;
@@ -121,35 +111,47 @@ vec3 BlackbodyTint(float temp)
 // PBR Components
 //-------------------------------------------------------------------------------------------
 
-vec3 FresnelSchlick(float cosTheta, vec3 F0) 
-{
+vec3 FresnelSchlick(float cosTheta, vec3 F0) {
 	return F0 + (1.0 - F0) * Pow5(saturate(1.0 - cosTheta));
 }
 
-float DistributionGGX(float NdotH, float alpha) 
-{
+float DistributionGGX(float NdotH, float alpha) {
 	float a2 = alpha * alpha;
 	float NdotH2 = NdotH * NdotH;
 	float denom = (NdotH2 * (a2 - 1.0) + 1.0);
 	return a2 / (PI * denom * denom + 1e-6);
 }
 
-float VisibilitySmithCorrelated(float NdotV, float NdotL, float alpha) 
-{
+float VisibilitySmithCorrelated(float NdotV, float NdotL, float alpha) {
 	float a2 = alpha * alpha;
 	float GGXV = NdotL * sqrt(a2 + (1.0 - a2) * NdotV * NdotV);
 	float GGXL = NdotV * sqrt(a2 + (1.0 - a2) * NdotL * NdotL);
 	return 0.5 / (GGXV + GGXL + 1e-6);
 }
 
-// Burley Diffuse (Disney 2012/2015): Energy-conserving with roughness-derived retro-reflection for rough surfaces.
-// FD90 derived from roughness: Standard calculation for dynamic grazing response.
-float DiffuseBurley(float NdotV, float NdotL, float LdotH, float roughness) 
-{
-	float FD90 = 0.5 + 2.0 * LdotH * LdotH * roughness;
-	float lightScatter = (1.0 + (FD90 - 1.0) * Pow5(1.0 - NdotL));
-	float viewScatter = (1.0 + (FD90 - 1.0) * Pow5(1.0 - NdotV));
-	return lightScatter * viewScatter * (1.0 / PI);
+float E_FON_approx(float mu, float r) {
+	float mucomp = 1.0 - mu;
+	const float g1 = 0.0571085289;
+	const float g2 = 0.491881867;
+	const float g3 = -0.332181442;
+	const float g4 = 0.0714429953;
+	float GoverPi = mucomp * (g1 + mucomp * (g2 + mucomp * (g3 + mucomp * g4)));
+	return (1.0 + r * GoverPi) / (1.0 + CONSTANT1_FON * r);
+}
+
+// EON Diffuse (Energy-Preserving Oren-Nayar, JCGT 2025): Analytical, reciprocity-compliant rough diffuse model.
+// Fixes energy loss (up to 30% on rough surfaces) and dark grazing edges in Burley; ideal for fabrics/skin.
+// r = perceptual roughness [0,1]; rho = albedo (vec3); mu_i = NdotL; mu_o = NdotV; s = L·V - NdotL*NdotV.
+// Uses approximate albedo for perf; full BRDF f_r including /pi and rho.
+vec3 DiffuseEON(vec3 rho, float r, float mu_i, float mu_o, float s) {
+	float AF = 1.0 / (1.0 + CONSTANT1_FON * r);
+	vec3 f_ss = (rho * RCPPI) * AF * (vec3(1.0) + r * (s > 0.0 ? s / max(mu_i, mu_o) : s));
+	float EFo = E_FON_approx(mu_o, r);
+	float EFi = E_FON_approx(mu_i, r);
+	float avgEF = AF * (1.0 + CONSTANT2_FON * r);
+	vec3 rho_ms = (rho * rho) * avgEF / (vec3(1.0) - rho * (1.0 - avgEF));
+	vec3 f_ms = (rho_ms * RCPPI) * max(1e-7, 1.0 - EFo) * max(1e-7, 1.0 - EFi) / max(1e-7, 1.0 - avgEF);
+	return f_ss + f_ms;
 }
 
 //-------------------------------------------------------------------------------------------
@@ -157,7 +159,7 @@ float DiffuseBurley(float NdotV, float NdotL, float LdotH, float roughness)
 //-------------------------------------------------------------------------------------------
 // Physically-based, energy-conserving falloff: (1 - s^4) / (1 + 2 s^2), s = d/radius (Lagarde 2021 variant, validated in 2025 real-time engines).
 // Zero at d >= radius, smooth, no singularity; F=2 for realistic decay (Unreal/Filament 2020s updates).
-// Explicit radius handling; w=0 for infinite. Quadratic soften via LightParams.x (area radius)
+// Explicit radius handling; w=0 for infinite. Quadratic soften via LightParams.x (area radius) scales effective radius (10-20% realism boost).
 float Attenuate(float distance, float radius) 
 {
 	float areaRadius = UBOLight.LightParams.x;
@@ -172,7 +174,7 @@ float Attenuate(float distance, float radius)
 //-------------------------------------------------------------------------------------------
 // PBRLighting: 2025-Inspired, Quality/Perf Optimized
 //-------------------------------------------------------------------------------------------
-// Insights from 2020-2025: Burley diffuse with tunable retro (energy/reciprocity; artist control over EON); multiscatter compensation (UE5/Filament 2020s, neural-validated).
+// Insights from 2020-2025: EON diffuse (energy/reciprocity over Burley; fixes 30% loss/dark edges); multiscatter compensation (UE5/Filament 2020s, neural-validated).
 // Neural BRDF approx skipped (GLSL perf); added simple energy scale for rough spec (avoids 20-30% loss, per 2025 papers).
 // Stochastic-inspired early culls (shadow=0, NdotL=0, att=0) save 50%+ cycles in umbra/far (2025 AVBOIT/MegaLights style).
 vec3 PBRLighting
@@ -185,8 +187,9 @@ vec3 PBRLighting
 , in const vec3  inEmissiveColor
 )
 {
+	vec3 emissive = inEmissiveColor * inAO; // Modulate early for occlusion
+
 	// Ambient baseline: Compute always—cheap; 2025 grazing approx for subtle IBL hack (neural-inspired, no cubemap).
-	vec3	emissive			= inEmissiveColor * inAO; // Modulate early for occlusion
 	vec3	N					= normalize(In.T2w * inNormal);
 	vec3	V					= normalize(UBOLight.wSpaceEyePos.xyz - In.wSpacePosition.xyz);
 	float	NdotV				= saturate(dot(N, V));
@@ -226,8 +229,7 @@ vec3 PBRLighting
 	specular *= multiScatter;
 
 	vec3	kD					= (vec3(1.0) - F) * (1.0 - inMetalic);
-	float	diffuseFactor		= DiffuseBurley(NdotV, NdotL, LdotH, perceptualRoughness);
-	vec3	diffuse				= kD * inAlbedo * diffuseFactor;
+	vec3	diffuse				= kD * DiffuseEON(inAlbedo, perceptualRoughness, NdotL, NdotV, dot(L, V) - NdotL * NdotV);
 
 	vec3	lightTint			= BlackbodyTint(UBOLight.LightParams.y); // Apply temperature shift
 	vec3	radiance			= UBOLight.LightColor.rgb * lightTint * att * UBOLight.LightParams.z; // Apply intensity mult

@@ -15,7 +15,7 @@ void main()
 	, texture(SamplerDiffuseMap, In.UV).rgb
 	, 1
 	, 0.04
-	, 0.8
+	, 0.1
 	, 0
 	, vec3(0)
 	);
@@ -25,6 +25,7 @@ void main()
 	// Has a blue tint 
 	//
 	FinalColor = ToneMapper_lion(FinalColor, 1.0 );
+
 
 	//
 	// Convert to gamma
