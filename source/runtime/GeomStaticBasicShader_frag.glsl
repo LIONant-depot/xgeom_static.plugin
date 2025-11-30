@@ -15,16 +15,18 @@ void main()
 	, texture(SamplerDiffuseMap, In.UV).rgb
 	, 1
 	, 0.04
-	, 0.1
+	, 1
 	, 0
 	, vec3(0)
 	);
+
 
 	//
 	// Tone map from (HDR) to (LDR) before gamma correction
 	// Has a blue tint 
 	//
 	FinalColor = ToneMapper_lion(FinalColor, 1.0 );
+
 
 
 	//
