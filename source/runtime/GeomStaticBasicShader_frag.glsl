@@ -25,8 +25,7 @@ void main()
 	// Tone map from (HDR) to (LDR) before gamma correction
 	// Has a blue tint 
 	//
-	FinalColor = ToneMapper_lion(FinalColor, 1.0 );
-
+	FinalColor = ToneMapper_lion(FinalColor );
 
 
 	//
