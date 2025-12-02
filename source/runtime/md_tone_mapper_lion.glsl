@@ -18,6 +18,7 @@ vec3 ToneMapper_lion(vec3 v)
     float l = dot(v, vec3(0.2126, 0.2152, 0.0722));
 
     v = m_inv * max(l + 0.93 * (pow(v, vec3(2.5)) - l), 0.0);
-
-    return v * 1.3;
+    v *= 1.3;
+    return v;
 }
+

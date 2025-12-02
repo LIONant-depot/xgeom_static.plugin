@@ -4,6 +4,7 @@
 
 #include "mb_standard_pbr_frag.glsl"
 #include "md_tone_mapper_lion.glsl"
+#include "mb_lineartogamma_frag.glsl"
 
 layout(binding = 1) uniform sampler2D SamplerDiffuseMap;		// [INPUT_TEXTURE_DIFFUSE]
 layout(location = 0) out vec4 outFragColor;
@@ -31,8 +32,7 @@ void main()
 	//
 	// Convert to gamma
 	//
-	const float Gamma = 2.2; //pushConsts.wSpaceEyePos.w;
 	outFragColor.a = 1;
-	outFragColor.rgb = pow(FinalColor.rgb, vec3(1.0f / Gamma));
+	outFragColor.rgb = linearToSrgb(FinalColor);
 }
 
