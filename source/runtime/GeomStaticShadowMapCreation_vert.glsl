@@ -1,6 +1,6 @@
 #version 450
 
-#include "xgeom_static_mb_position_vert.glsl"
+#include "xgeom_static_mb_input_position.vert"
 
 // Mesh-level uniforms (updated once per mesh / per frame)
 layout(set = 2, binding = 0) uniform MeshUniforms
@@ -11,6 +11,6 @@ layout(set = 2, binding = 0) uniform MeshUniforms
 // Simple transform
 void main()
 {
-    gl_Position = mesh.L2C * getVertexLocalPosition();
+    gl_Position = mesh.L2C * getVertexLocalPosition().Value;
 }
 

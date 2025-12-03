@@ -1,7 +1,7 @@
 #version 450
 
-#include "xgeom_static_mb_standard_vert.glsl"
-
+#include "xgeom_static_mb_input_full.vert"
+#include "mb_varying_definition_full.glsl"
 
 // Mesh-level uniforms (updated once per mesh / per frame)
 layout(set=2, binding = 0) uniform MeshUniforms
@@ -13,18 +13,12 @@ layout(set=2, binding = 0) uniform MeshUniforms
 
 
 // Fragment shader inputs
-layout(location = 0) out struct _o
-{
-    mat3 T2w;             // Tangent to small-world (rotation only)
-    vec4 wSpacePosition;  // Position in small world
-    vec4 ShadowPosition;  // Position in shadow texture-clip-space
-    vec2 UV;              // Final texture coordinates
-} Out;
+layout(location = 0) out VaryingFull Out;
 
 
 void main()
 {
-    const vertex_data VertData = getVertexData();
+    const mb_full_vertex VertData = getVertexData();
 
     //
     // Transform to all needed spaces
@@ -52,5 +46,7 @@ void main()
 
     // Tangent-to-world matrix (rotation only)
     Out.T2w = L2w_rot * mat3(VertData.Tangent, VertData.Binormal, VertData.Normal);
+
+    Out.VertColor = vec4(1.,1.,1.,1.);
 }
 

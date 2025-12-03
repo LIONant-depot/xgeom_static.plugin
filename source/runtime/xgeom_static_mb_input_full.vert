@@ -1,6 +1,6 @@
 
-#include "xgeom_static_mb_input_basics_vert.glsl"
-#include "mb_standard_definition_vert.glsl"
+#include "xgeom_static_mb_clusters.vert"
+#include "mb_input_definition_full.vert"
 
 //
 // Vertex inputs
@@ -26,9 +26,9 @@ vec3 oct_decode(vec2 e)
 //
 // Gets the vertex local position
 //
-vertex_data getVertexData() 
+mb_full_vertex getVertexData()
 {
-    vertex_data Data;
+    mb_full_vertex Data;
 
     // Select cluster by push constant index
     ClusterData selectedCluster = cluster[push.clusterIndex];
@@ -73,6 +73,6 @@ vertex_data getVertexData()
     Data.Normal                 = oct_decode(enc_normal);
     Data.Tangent                = oct_decode(enc_tangent);
     Data.Binormal               = cross(Data.Normal, Data.Tangent) * binormal_sign;
-
+    Data.VertColor              = vec4(1.,1.,1.,1.);
     return Data;
 }

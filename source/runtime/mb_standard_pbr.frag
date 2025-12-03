@@ -50,15 +50,10 @@
 // 
 //-------------------------------------------------------------------------------------------
 
-#include "mb_standard_shadow_frag.glsl"
+#include "mb_standard_shadow.frag"
+#include "mb_varying_definition_full.glsl"
 
-layout(location = 0) in struct
-{
-	mat3 T2w;                          // Tangent space to world (Rotation Only)
-	vec4 wSpacePosition;               // Vertex pos in world space
-	vec4 ShadowPosition;               // Vertex position in shadow space
-	vec2 UV;                           // Texture coordinates
-} In;
+layout(location = 0) in VaryingFull In;
 
 layout(set = 2, binding = 1) uniform lighting_uniforms
 {

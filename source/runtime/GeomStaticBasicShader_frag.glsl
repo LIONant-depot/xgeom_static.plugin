@@ -2,9 +2,9 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-#include "mb_standard_pbr_frag.glsl"
-#include "md_tone_mapper_lion.glsl"
-#include "mb_lineartogamma_frag.glsl"
+#include "mb_standard_pbr.frag"
+#include "mb_tone_mapper_lion.frag"
+#include "mb_lineartogamma.frag"
 
 layout(binding = 1) uniform sampler2D SamplerDiffuseMap;		// [INPUT_TEXTURE_DIFFUSE]
 layout(location = 0) out vec4 outFragColor;

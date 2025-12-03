@@ -2,8 +2,9 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-#include "Cache/Plugins/xgeom_static/Runtime/mb_standard_pbr_frag.glsl"
-#include "Cache/Plugins/xgeom_static/Runtime/md_tone_mapper_lion.glsl"
+#include "Cache/Plugins/xgeom_static/Runtime/mb_standard_pbr.frag"
+#include "Cache/Plugins/xgeom_static/Runtime/mb_tone_mapper_lion.frag"
+#include "Cache/Plugins/xgeom_static/Runtime/mb_lineartogamma.frag"
 
 //layout(binding = 0) uniform sampler2D SamplerShadowMap;        // [INPUT_TEXTURE_100]	// depth system dependent
 layout(binding = 1) uniform sampler2D SamplerNormal;           // [INPUT_TEXTURE_110]	// liniar BC5 Tangent space normal
@@ -34,7 +35,7 @@ void main()
 	, texture(SamplerEmmisive, In.UV).rgb
 	);
 	FinalColor = ToneMapper_lion(FinalColor, 1.0);
-	const float Gamma = 2.2;
+
 	outFragColor.a = 1;
-	outFragColor.rgb = pow(FinalColor.rgb, vec3(1.0f / Gamma));
+	outFragColor.rgb = linearToSrgb(FinalColor);
 }
