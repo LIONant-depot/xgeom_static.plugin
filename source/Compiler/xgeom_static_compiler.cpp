@@ -856,7 +856,7 @@ void ConvertToCompilerMesh(void)
         {
             if (Descriptor.m_bMergeAllMeshes)
             {
-                std::string newName = std::to_string(Descriptor.m_AllMeshesDetails.m_GUID);
+                std::string newName = Descriptor.m_AllMeshesDetails.m_Name;
                 Geom.CollapseMeshes(newName);
                 if (!Geom.m_Mesh.empty())
                 {
@@ -868,7 +868,7 @@ void ConvertToCompilerMesh(void)
             {
                 for (const auto& group : Descriptor.m_MergeGroupList)
                 {
-                    std::string newName = std::to_string(group.m_MeshDetails.m_GUID);
+                    std::string newName = group.m_MeshDetails.m_Name;
 
                     std::unordered_set<int> olds;
                     for (const auto& np : group.m_NodePathList)
@@ -920,7 +920,7 @@ void ConvertToCompilerMesh(void)
                     int idx = Geom.findMeshByPath(fullName);
                     if (idx != -1)
                     {
-                        std::string newName = std::to_string(um.m_MeshDetails.m_GUID);
+                        std::string newName = um.m_MeshDetails.m_Name;
                         Geom.m_Mesh[idx].m_Name = newName;
                         OutHashMap[newName] = const_cast<xgeom_static::mesh_details*>(&um.m_MeshDetails);
                     }

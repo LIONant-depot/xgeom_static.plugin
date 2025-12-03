@@ -41,12 +41,12 @@ namespace xgeom_static
 
     struct mesh_details
     {
-        std::uint32_t               m_GUID = {};
+        std::string                 m_Name = {};
         std::vector<lod>            m_LODs = {};
 
         XPROPERTY_DEF
         ( "mesh_details", mesh_details
-        , obj_member<"GUID", &mesh_details::m_GUID >
+        , obj_member<"Name", &mesh_details::m_Name >
         , obj_member<"LODs", &mesh_details::m_LODs >
         )
     };
@@ -164,6 +164,83 @@ namespace xgeom_static
 
         void Validate(std::vector<std::string>& Errors) const noexcept override
         {
+            //
+            // Make sure tha the user has enter a file to import
+            //
+            if ( m_ImportAsset.empty() )
+            {
+                Errors.push_back(std::format("You have forgotten to fill the ImportMesh field which is required"));
+            }
+
+            //
+            // Make sure all the group have valid names
+            //
+            if ( m_bMergeAllMeshes == false )
+            {
+                std::vector<std::string> Names;
+
+                for( auto& Group : m_MergeGroupList)
+                {
+                    if ( Group.m_MeshDetails.m_Name.empty() )
+                    {
+                        Errors.push_back(std::format("Please enter tha valid MESH name for merge group {}", Group.m_MeshDetails.m_Name));
+                    }
+                }
+
+                // Make sure group don't repeat mesh names
+                for ( int i=0; i< m_MergeGroupList.size(); ++i )
+                {
+                    Names.push_back(m_MergeGroupList[i].m_MeshDetails.m_Name);
+
+                    for (int j = i+1; j < m_MergeGroupList.size(); ++j)
+                    {
+                        if (m_MergeGroupList[i].m_MeshDetails.m_Name == m_MergeGroupList[j].m_MeshDetails.m_Name )
+                        {
+                            Errors.push_back(std::format("Please keep your mesh names unique because group {} and group {} are using {} as their mesh names", m_MergeGroupList[i].m_Name, m_MergeGroupList[j].m_Name, m_MergeGroupList[j].m_MeshDetails.m_Name));
+                        }
+                    }
+                }
+
+                // Double check the ungroup meshes
+                for ( int i=0; i<m_UngroupMeshList.size(); i++)
+                {
+                    Names.push_back(m_UngroupMeshList[i].m_MeshDetails.m_Name);
+
+                    for (int j = 0; j < m_UngroupMeshList.size(); j++)
+                    {
+                        if (m_UngroupMeshList[i].m_MeshDetails.m_Name == m_UngroupMeshList[j].m_MeshDetails.m_Name)
+                        {
+                            Errors.push_back(std::format("Please keep your mesh names unique because ungroup mesh {} and ungroup mesh {} are using {} as their mesh names", m_UngroupMeshList[i].m_MeshName, m_UngroupMeshList[j].m_MeshName, m_UngroupMeshList[j].m_MeshDetails.m_Name));
+                        }
+
+                    }
+                }
+
+                // Group names together
+                std::sort(Names.begin(), Names.end());
+
+                // Finally for a global name collision check
+                for (int i = 0; i < Names.size()-1; i++)
+                {
+                    int iCollisions = 0;
+                    for ( int j=i+1; Names[i] == Names[j]; j++ ) iCollisions++;
+
+                    if (iCollisions)
+                    {
+                        Errors.push_back(std::format("Cross referencing names I found {} collisions with mesh name {}", iCollisions, Names[i]));
+                        i += iCollisions;
+                    }
+                }
+            }
+            else
+            {
+                if ( m_AllMeshesDetails.m_Name.empty())
+                {
+                    Errors.push_back(std::format("You have forgotten to enter the name of the final mesh"));
+                }
+            }
+
+
         }
 
         int findMaterial(std::string_view Name)
@@ -428,18 +505,18 @@ namespace xgeom_static
 
         inline std::vector<std::string> MergeWithDetails(xgeom_static::details& Details);
 
-        std::wstring                                m_ImportAsset = {};
-        pre_transform                               m_PreTranslation = {};
-        bool                                        m_bMergeAllMeshes = true;
-        mesh_details                                m_AllMeshesDetails = {};
-        std::vector<material_details>               m_MaterialDetailsList = {};
-        std::vector<xrsc::material_instance_ref>    m_MaterialInstRefList = {};
-        std::vector<ungroup_mesh>                   m_UngroupMeshList = {};
-        std::vector<merge_group>                    m_MergeGroupList = {};
-        std::vector<delete_entry>                   m_DeleteEntryList = {};
+        std::wstring                                m_ImportAsset           = {};
+        pre_transform                               m_PreTranslation        = {};
+        bool                                        m_bMergeAllMeshes       = true;
+        mesh_details                                m_AllMeshesDetails      = {};
+        std::vector<material_details>               m_MaterialDetailsList   = {};
+        std::vector<xrsc::material_instance_ref>    m_MaterialInstRefList   = {};
+        std::vector<ungroup_mesh>                   m_UngroupMeshList       = {};
+        std::vector<merge_group>                    m_MergeGroupList        = {};
+        std::vector<delete_entry>                   m_DeleteEntryList       = {};
 
         XPROPERTY_VDEF
-        ("GeomStatic", descriptor
+        ( "GeomStatic", descriptor
             , obj_member<"ImportAsset",         &descriptor::m_ImportAsset, member_ui<std::wstring>::file_dialog<mesh_filter_v, true, 1> >
             , obj_member<"PreTranslation",      &descriptor::m_PreTranslation >
             , obj_member<"bMergeAllMeshes",     &descriptor::m_bMergeAllMeshes >

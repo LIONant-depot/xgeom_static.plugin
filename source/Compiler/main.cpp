@@ -24,13 +24,13 @@ int main( int argc, const char* argv[] )
         static const char* pDebugArgs[] =
         { "StaticGeomCompiles..."
         , "-PROJECT"
-        , "D:\\LIONant\\xGPU\\example.lionprj"
+        , "D:\\xgpu_test\\xGPU\\example.lionprj"
         , "-DEBUG"
         , "D1"
         , "-DESCRIPTOR"
         , "Descriptors\\GeomStatic\\03\\40\\949478640AFE4003.desc"
         , "-OUTPUT"
-        , "D:\\LIONant\\xGPU\\example.lionprj\\Cache\\Resources\\Platforms\\WINDOWS"
+        , "D:\\xgpu_test\\xGPU\\example.lionprj\\Cache\\Resources\\Platforms\\WINDOWS"
         };
 
         argv = pDebugArgs;
