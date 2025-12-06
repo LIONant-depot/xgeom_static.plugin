@@ -19,7 +19,7 @@ mb_position getVertexLocalPosition()
     const vec3 norm_pos = (vec3(in_PosExtra.xyz) + 32768.0) / 32767.5 - 1.0;
 
     mb_position Position;
-    Position.Value = vec4(norm_pos * selectedCluster.posScale.xyz + selectedCluster.posTranslation.xyz, 1.0);
+    Position.Value = vec4(norm_pos.xyz * selectedCluster.posScale.xyz + selectedCluster.posTranslation.xyz, 1.0);
 
     return Position;
 }
