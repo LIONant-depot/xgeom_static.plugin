@@ -167,6 +167,18 @@ float Attenuate(float distance, float radius)
 }
 
 //-------------------------------------------------------------------------------------------
+// Trasforms the Normal to World space using the MikkTSpace method
+//-------------------------------------------------------------------------------------------
+vec3 TransformNotmalToWorld( vec3 inNormal )
+{
+	// Construct bitangent (must stay unnormalized as expected by MikkTSpace)
+	vec3 vB = In.Tangent.w * cross(In.Normal.xyz, In.Tangent.xyz);  
+
+	// Decode final world normal
+    return normalize(inNormal.x * In.Tangent.xyz + inNormal.y * vB.xyz + inNormal.z * In.Normal.xyz);  
+}
+
+//-------------------------------------------------------------------------------------------
 // PBRLighting: 2025-Inspired, Quality/Perf Optimized
 //-------------------------------------------------------------------------------------------
 // Insights from 2020-2025: EON diffuse (energy/reciprocity over Burley; fixes 30% loss/dark edges); multiscatter compensation (UE5/Filament 2020s, neural-validated).
@@ -184,8 +196,9 @@ vec3 PBRLighting
 {
 	vec3 emissive = inEmissiveColor * inAO; // Modulate early for occlusion
 
+
 	// Ambient baseline: Compute always—cheap; 2025 grazing approx for subtle IBL hack (neural-inspired, no cubemap).
-	vec3	N					= normalize(In.T2w * inNormal);
+	vec3    N                   = TransformNotmalToWorld(inNormal);
 	vec3	V					= normalize(UBOLight.wSpaceEyePos.xyz - In.wSpacePosition.xyz);
 	float	NdotV				= saturate(dot(N, V));
 	vec3	ambientDiffuse		= (1.0 - inMetalic) * inAlbedo * UBOLight.AmbientLightColor.rgb * inAO / PI;

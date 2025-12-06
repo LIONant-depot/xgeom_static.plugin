@@ -1056,7 +1056,7 @@ void ConvertToCompilerMesh(void)
                 //
                 {
                     displayProgressBar("Cleaning up Geom", 1);
-                    //m_RawGeom.CollapseNormals();
+                    m_RawGeom.ComputeTangentsAndBinormalsMikk();
                     m_RawGeom.CleanMesh();
                     m_RawGeom.SortFacetsByMeshMaterialBone();
                     displayProgressBar("Cleaning up Geom", 1);

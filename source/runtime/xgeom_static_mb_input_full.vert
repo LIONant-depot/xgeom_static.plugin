@@ -70,9 +70,10 @@ mb_full_vertex getVertexData()
     const vec2 enc_normal       = vec2(combined.xy) / 4095.0;
     const vec2 enc_tangent      = vec2(combined.z / 4095.0, combined.w / 2047.0);
 
+    Data.Tangent.xyz            = oct_decode(enc_tangent);
+    Data.Tangent.w              = binormal_sign;
     Data.Normal                 = oct_decode(enc_normal);
-    Data.Tangent                = oct_decode(enc_tangent);
-    Data.Binormal               = cross(Data.Normal, Data.Tangent) * binormal_sign;
     Data.VertColor              = vec4(1.,1.,1.,1.);
+
     return Data;
 }

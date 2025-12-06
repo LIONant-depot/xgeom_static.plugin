@@ -33,20 +33,28 @@ void main()
     Out.UV = VertData.UV;
 
     //
-    //  Tanget to Worls matrix
+    // Handle the Tangent space transforms for MikkTSpace
     // 
     
-    // Build rotation-only matrix from L2w (strips scaling/shear)
-    const mat3 L2w_rot = mat3(normalize(mesh.L2w[0].xyz),
-                              normalize(mesh.L2w[1].xyz),
-                              normalize(mesh.L2w[2].xyz));
+    // Extract scales from L2w column lengths (handles non-uniform scales in the L2W) 
+    // However does not handle skew matrices... not used offen
+    vec3 scales = vec3( length(mesh.L2w[0].xyz),
+                        length(mesh.L2w[1].xyz),
+                        length(mesh.L2w[2].xyz));
 
-    // Optional: Gram-Schmidt to orthonormalize T
-    // Tangent = normalize(Tangent - Normal * dot(Normal, Tangent));
+    // Scale normals/tangents inversely before forward transform
+    const vec3 scaledNormal     = normalize(VertData.Normal.xyz)  / scales;
+    const vec3 scaledTangent    = normalize(VertData.Tangent.xyz) / scales;
 
-    // Tangent-to-world matrix (rotation only)
-    Out.T2w = L2w_rot * mat3(VertData.Tangent, VertData.Binormal, VertData.Normal);
+    const mat3 RotMat           = mat3(mesh.L2w);
 
-    Out.VertColor = vec4(1.,1.,1.,1.);
+    Out.Tangent.xyz             = normalize(RotMat * scaledTangent);
+    Out.Tangent.w               = VertData.Tangent.w;                   // Binormal signed
+    Out.Normal                  = normalize(RotMat * scaledNormal);
+
+    //
+    // Save the vertex color
+    //
+    Out.VertColor = VertData.VertColor;
 }
 
