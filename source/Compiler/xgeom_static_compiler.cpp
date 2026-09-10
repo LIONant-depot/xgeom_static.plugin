@@ -1216,6 +1216,18 @@ void ConvertToCompilerMesh(void)
             displayProgressBar("Loading Descriptor", 1);
 
             //
+            // Register the raw FBX/OBJ as a dependency BEFORE attempting to load it - so the Asset
+            // Browser's "who uses this file" tracking (m_AssetDataBase) knows about the link even if
+            // the load below fails (a broken link should still show as a tracked dependency, not
+            // silently vanish from the graph). Mirrors xtexture_compiler.cpp's own
+            // DumpAllFileNamesIntoHash()/AddTexture, which registers its own raw inputs the same way,
+            // before loading them - this compiler was simply missing the equivalent call entirely,
+            // confirmed live: a real StaticGeom resource's own dependencies.txt didn't exist at all,
+            // and the Asset Tree's hover tooltip correctly reported zero dependents for its source FBX
+            // even though a real StaticGeom resource was compiled from it.
+            m_Dependencies.m_Assets.push_back(m_Descriptor.m_ImportAsset);
+
+            //
             // Load the source data
             //
             displayProgressBar("Loading Mesh", 0);
