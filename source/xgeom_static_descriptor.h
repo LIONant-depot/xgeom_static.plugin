@@ -543,7 +543,7 @@ namespace xgeom_static
             >>
             , obj_member<"Deleted List", &descriptor::m_DeleteEntryList >
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>>
-            , obj_member<"MaterialInstance", &descriptor::m_MaterialInstRefList, member_ui_open<true> >
+            , obj_member<"MaterialInstance", &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<> >
         )
     };
     XPROPERTY_VREG(descriptor)
