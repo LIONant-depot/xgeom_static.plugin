@@ -362,7 +362,13 @@ namespace xgeom_static_editor::preview
             m_MatValid.clear();
         }
 
-        ~runtime() noexcept { ReleaseMaterials(); }
+        ~runtime() noexcept
+        {
+            ReleaseMaterials();
+            xeditor::DestroyGpu( m_pDevice, m_NormalInstance, m_ShadowInstance, m_WireInstance, m_GridInstance
+                               , m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline, m_GridPipeline
+                               , m_ShadowPass, m_ShadowMap, m_DefaultTexture );
+        }
 
         // Right drag turns the camera, middle drag pans, the wheel zooms, Space lets the light follow the camera.
         // Call right after the preview canvas item was submitted.

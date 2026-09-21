@@ -44,7 +44,7 @@ namespace xgeom_static_editor
         std::string Redo() noexcept override
         {
             std::string Node, Group;
-            if (!xeditor::descriptor_cmds::GetArg(m_Parser, m_hNode, Node) || (m_bGroupArg && !xeditor::descriptor_cmds::GetArg(m_Parser, m_hGroup, Group)))
+            if (!xeditor::cmd_util::GetArg(m_Parser, m_hNode, Node) || (m_bGroupArg && !xeditor::cmd_util::GetArg(m_Parser, m_hGroup, Group)))
                 return std::format("{}: bad arguments", m_pCommandName);
             if (!m_Doc.m_pDescriptor) return std::format("{}: nothing loaded", m_pCommandName);
 
