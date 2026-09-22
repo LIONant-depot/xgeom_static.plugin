@@ -27,6 +27,7 @@ Run as `<resource name>\<Command>` (see `list`) or `ResourceEditorCommand -Asset
 |---|---|
 | `ListProperties [-Filter text]` | every descriptor property with its value: the paths `SetProperty` takes |
 | `SetProperty -Path -Value [-Before]` | one property (undoable). A list is resized with a path ending in `[]` |
+| `ListOp -Path -Op Insert\|Delete\|Move -Index n [-ToIndex n]` | inserts, deletes or moves an element in the middle of a 1D array property (undoable); ordinal keys only |
 | `ListNodes` | the scene nodes with their merge group and deleted state (after the first compile) |
 | `AddNodeToNewGroup -Node`, `AddNodeToGroup -Node -Group <index>`, `RemoveNodeFromGroup -Node` | merge groups (undoable) |
 | `DeleteNode -Node`, `UndeleteNode -Node` | leave a node and its children out of the compiled geometry (undoable) |
