@@ -6,6 +6,7 @@
 // inspector and through the node commands (merge groups, deleted nodes), all undoable; the compiled geometry is previewed in 3D next
 // to its statistics. Hosts include this header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
+#include "source/Tools/Editor/xeditor_camera.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/E10_InspectorPickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
 #include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_editor_preview.h"
@@ -149,6 +150,10 @@ namespace xgeom_static_editor
 
         preview::runtime                    m_Preview;
         static_geom_inspector               m_Info;
+        xeditor::set_preview_cmd<render_settings>  m_SetPreview;
+        xeditor::list_preview_cmd<render_settings> m_ListPreview;
+        xeditor::lambda_query_cmd                           m_Statistics;
+        xeditor::camera_cmds                                m_CameraCmds;
         xeditor::inspector_panel            m_SettingsInspector{ "Rendering Settings" };
         xrsc::geom_static                   m_GeomRef;
         bool                                m_bHasGeom = false;         // the compiled geometry is loaded and drawable
@@ -161,6 +166,9 @@ namespace xgeom_static_editor
             , m_DeleteNode      (m_Undo, m_Document, m_Details, "DeleteNode",         "Leaves a node (and its children) out of the compiled geometry (undoable). Usage: DeleteNode -Node base64", &DeleteNode, false)
             , m_UndeleteNode    (m_Undo, m_Document, m_Details, "UndeleteNode",       "Puts a deleted node back (undoable). Usage: UndeleteNode -Node base64",                         &UndeleteNode,    false)
             , m_ListNodes(m_Undo, m_Document, m_Details)
+            , m_SetPreview(m_Undo, m_Preview.m_Settings), m_ListPreview(m_Undo, m_Preview.m_Settings)
+            , m_Statistics(m_Undo, "Statistics", "The statistics of the compiled geometry (meshes, vertices, sizes). Usage: Statistics", [this] { return xeditor::cmd_util::ListProperties({ xproperty::getObject(m_Info), &m_Info }, {}); })
+            , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); } })
         {
             for (auto* pInspector : { &m_DescriptorInspector.m_Inspector, &m_SettingsInspector.m_Inspector })
                 e10::WireResourcePickerCallbacks(*pInspector);

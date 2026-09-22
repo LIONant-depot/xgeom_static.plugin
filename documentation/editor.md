@@ -32,6 +32,10 @@ Run as `<resource name>\<Command>` (see `list`) or `ResourceEditorCommand -Asset
 | `DeleteNode -Node`, `UndeleteNode -Node` | leave a node and its children out of the compiled geometry (undoable) |
 | `Save`, `Compile` | save the descriptor; validate, save and queue the compile |
 | `Undo`, `Redo` | |
+| `CompileStatus [-Lines n]` | how the last compile went: state, unsaved changes, validation errors, the end of the log |
+| `SetCamera [-Yaw -Pitch -Distance -Target x,y,z]`, `GetCamera`, `FrameSubject` | the preview camera (degrees), read back, or refitted to the subject (view state, not undoable) |
+| `ListPreview [-Filter]`, `SetPreview -Path -Value` | the preview settings (the ones on the Rendering Options panel), by the paths `ListPreview` prints; an enum takes its item name |
+| `Statistics` | meshes, vertices, submeshes and so on of the compiled geometry |
 
 Each node command snapshots the descriptor first, so undo restores everything it touched (groups, ungrouped meshes, the deleted list and the
 material reference counts). A node is named by its path from the scene root, e.g. `RootNode/Armature/Body`.
