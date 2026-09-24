@@ -262,6 +262,10 @@ namespace xgeom_static_editor
         void RenderPreview() noexcept
         {
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
+            // Flat fill behind the grid, matching GeomSkin/Skeleton's preview background - without this,
+            // whatever the grid plane doesn't cover (most of the frame, at this camera framing) shows the
+            // theme's plain dark panel color instead. The grid itself is untouched.
+            ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetCursorScreenPos(), ImGui::GetCursorScreenPos() + Avail, IM_COL32(115, 115, 115, 255));
             ImGui::InvisibleButton("##GeomPreviewCanvas", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
             m_Preview.HandleInput();
 
