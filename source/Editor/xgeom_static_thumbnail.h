@@ -87,8 +87,12 @@ namespace xgeom_static_editor
             S.m_View.setFov(20_xdeg);
             S.m_View.setAspect(1.0f);
             S.m_View.setViewport({ 0, 0, static_cast<int>(s_CellPixels), static_cast<int>(s_CellPixels) });
-            S.m_Angles.m_Pitch = -30_xdeg;
-            S.m_Angles.m_Yaw   =  45_xdeg;
+            // Front-biased, not a full 3/4 corner view: matches Unity/Unreal's own default mesh-thumbnail
+            // convention (mostly-front, small offset for depth) - a strong 45deg diagonal reads a symmetric
+            // cube fine but makes an arbitrary asset's silhouette harder to recognize at 128x128 than a
+            // near-front view does, which is the actual job of a content-browser thumbnail.
+            S.m_Angles.m_Pitch = -12_xdeg;
+            S.m_Angles.m_Yaw   =  15_xdeg;
             S.m_CameraTarget   = pGeom->m_BBox.getCenter();
             S.m_Distance       = xeditor::ComputeTightFitDistance(S.m_View, S.m_Angles, S.m_CameraTarget, pGeom->m_BBox.m_Min, pGeom->m_BBox.m_Max);
 
