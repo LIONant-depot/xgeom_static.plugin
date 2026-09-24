@@ -35,11 +35,16 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
     std::wstring            Path        = Mgr.getResourcePath(GUID, type_name_v);
     xgeom_static::geom*     pGeom       = nullptr;
 
-    // Load the xgeom_static
+    // Load the xgeom_static. A missing/not-yet-compiled resource is an expected, recoverable case (same
+    // reasoning as xtexture_xgpu_rsc_loader.cpp's identical fix: the thumbnail system requests a Load for
+    // every geometry merely scrolled into view, or ever named by a stale asset-list entry whose own
+    // compile failed) - every caller already handles getResource() returning null, so return null instead
+    // of asserting-then-dereferencing a null pGeom below (a crash in a debug build, silent undefined
+    // behaviour in Release).
     xserializer::stream Stream;
     if (auto Err = Stream.Load(Path, pGeom); Err)
     {
-        assert(false);
+        return nullptr;
     }
 
     //
