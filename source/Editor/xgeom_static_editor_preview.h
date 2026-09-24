@@ -301,18 +301,25 @@ namespace xgeom_static_editor::preview
                 const auto Index = static_cast<int>(&MI - Materials.data());
                 xresource::g_Mgr.CloneRef(m_MatRefs[Index], MI);
 
-                if (MI.empty())
+                // Used both for a genuinely empty ref AND for a non-empty one that fails to resolve at
+                // any step below (the material instance itself, its material, or one of its textures) -
+                // those used to just `continue` with m_MatValid[Index] left false, which Draw() reads as
+                // "skip this submesh entirely". A resolution failure is exactly the "no default
+                // material" case this fallback already existed for, just reached a different way; the
+                // geometry itself should still render with something instead of silently vanishing.
+                const auto UseDefaultMaterial = [&]
                 {
                     auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_ShadowMap }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }
                                               , xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture } };
                     m_MatValid[Index] = Ok(m_pDevice->Create(m_MatInstances[Index], { .m_PipeLine = m_Pipeline3D, .m_SamplersBindings = Bindings }));
-                    continue;
-                }
+                };
+
+                if (MI.empty()) { UseDefaultMaterial(); continue; }
 
                 xmaterial_instance::rt* pMI = xresource::g_Mgr.getResource(m_MatRefs[Index]);
-                if (!pMI) continue;
+                if (!pMI) { UseDefaultMaterial(); continue; }
                 auto* pMat = xresource::g_Mgr.getResource(pMI->m_MaterialRef);
-                if (!pMat) continue;
+                if (!pMat) { UseDefaultMaterial(); continue; }
 
                 // Slot 0 of every material is the shadow map; the others are the material instance's textures
                 std::vector<xgpu::pipeline_instance::sampler_binding> Binds;
@@ -325,7 +332,7 @@ namespace xgeom_static_editor::preview
                     if (!pTexture) { bTextures = false; break; }
                     Binds.emplace_back(*pTexture);
                 }
-                if (!bTextures) continue;
+                if (!bTextures) { UseDefaultMaterial(); continue; }
 
                 // A material's pipeline is built the first time it is used with static geometry
                 auto& PipeLine = pMat->getPipeline(0);
