@@ -18,8 +18,8 @@ namespace xgeom_static
         float               m_ScreenArea    = 1;            // in pixels
         XPROPERTY_DEF
         ( "lod", lod
-        , obj_member<"LODReduction",    &lod::m_LODReduction >
-        , obj_member<"ScreenArea",      &lod::m_ScreenArea >
+        , obj_member<"LODReduction",    &lod::m_LODReduction, member_help<"Reduction factor applied to geometry complexity for this LOD level (0.0-1.0)">>
+        , obj_member<"ScreenArea",      &lod::m_ScreenArea, member_help<"Screen area coverage in pixels for this LOD level (used for LOD switching)">>
         )
     };
     XPROPERTY_REG(lod)
@@ -32,9 +32,9 @@ namespace xgeom_static
 
         XPROPERTY_DEF
         ( "preTransform", pre_transform
-        , obj_member<"Scale",       &pre_transform::m_Scale >
-        , obj_member<"Rotation",    &pre_transform::m_Rotation >
-        , obj_member<"Translation", &pre_transform::m_Translation >
+        , obj_member<"Scale",       &pre_transform::m_Scale, member_help<"Scaling factor applied to the geometry before import">>
+        , obj_member<"Rotation",    &pre_transform::m_Rotation, member_help<"Rotation (in degrees) applied to the geometry before import">>
+        , obj_member<"Translation", &pre_transform::m_Translation, member_help<"Position offset applied to the geometry before import">>
         )
     };
     XPROPERTY_REG(pre_transform)
@@ -46,8 +46,8 @@ namespace xgeom_static
 
         XPROPERTY_DEF
         ( "mesh_details", mesh_details
-        , obj_member<"Name", &mesh_details::m_Name >
-        , obj_member<"LODs", &mesh_details::m_LODs >
+        , obj_member<"Name", &mesh_details::m_Name, member_help<"Name of the mesh">>
+        , obj_member<"LODs", &mesh_details::m_LODs, member_help<"Level of Detail settings for this mesh: lower LODs are simpler for distant rendering">>
         )
     };
     XPROPERTY_REG(mesh_details)
@@ -62,9 +62,9 @@ namespace xgeom_static
 
         XPROPERTY_DEF
         ( "ungroup_mesh", ungroup_mesh
-        , obj_member<"Node Path", &ungroup_mesh::m_NodePath, member_flags< flags::SHOW_READONLY> >
-        , obj_member<"Mesh Name", &ungroup_mesh::m_MeshName, member_flags< flags::SHOW_READONLY> >
-        , obj_member<"Mesh Details", &ungroup_mesh::m_MeshDetails, member_ui_open<true> >
+        , obj_member<"Node Path", &ungroup_mesh::m_NodePath, member_flags< flags::SHOW_READONLY>, member_help<"Path to the node containing this mesh (read-only, shows where it came from)">>
+        , obj_member<"Mesh Name", &ungroup_mesh::m_MeshName, member_flags< flags::SHOW_READONLY>, member_help<"Name of the mesh (read-only)">>
+        , obj_member<"Mesh Details", &ungroup_mesh::m_MeshDetails, member_ui_open<true>, member_help<"Edit LOD settings for this ungrouped mesh">>
         )
     };
     XPROPERTY_REG(ungroup_mesh)
@@ -77,9 +77,9 @@ namespace xgeom_static
 
         XPROPERTY_DEF
         ( "merge_group", merge_group
-        , obj_member<"Name", &merge_group::m_Name >
-        , obj_member<"Node Path List", &merge_group::m_NodePathList, member_flags< flags::SHOW_READONLY> >
-        , obj_member<"Mesh Details", &merge_group::m_MeshDetails >
+        , obj_member<"Name", &merge_group::m_Name, member_help<"Name for this merge group (will become the mesh name)">>
+        , obj_member<"Node Path List", &merge_group::m_NodePathList, member_flags< flags::SHOW_READONLY>, member_help<"List of node paths included in this group (read-only)">>
+        , obj_member<"Mesh Details", &merge_group::m_MeshDetails, member_help<"LOD settings and name for the merged mesh">>
         )
     };
     XPROPERTY_REG(merge_group)
@@ -91,8 +91,8 @@ namespace xgeom_static
 
         XPROPERTY_DEF
         ( "delete_entry", delete_entry
-        , obj_member<"Node Path", &delete_entry::m_NodePath, member_flags< flags::SHOW_READONLY> >
-        , obj_member<"Mesh Name", &delete_entry::m_MeshName, member_flags< flags::SHOW_READONLY> >
+        , obj_member<"Node Path", &delete_entry::m_NodePath, member_flags< flags::SHOW_READONLY>, member_help<"Path to the node being deleted (empty means all meshes under this node)">>
+        , obj_member<"Mesh Name", &delete_entry::m_MeshName, member_flags< flags::SHOW_READONLY>, member_help<"Specific mesh name to delete (empty means all meshes under the node)">>
         )
     };
     XPROPERTY_REG(delete_entry)
@@ -103,8 +103,8 @@ namespace xgeom_static
         int                         m_RefCount = 0;
         XPROPERTY_DEF
         ( "material_details", material_details
-        , obj_member<"Name", &material_details::m_Name, member_flags< flags::SHOW_READONLY> >
-        , obj_member<"RefCount", &material_details::m_RefCount, member_flags< flags::SHOW_READONLY> >
+        , obj_member<"Name", &material_details::m_Name, member_flags< flags::SHOW_READONLY>, member_help<"Name of the material (read-only)">>
+        , obj_member<"RefCount", &material_details::m_RefCount, member_flags< flags::SHOW_READONLY>, member_help<"Number of times this material is used in the current descriptor configuration (read-only)">>
         )
     };
     XPROPERTY_REG(material_details)
@@ -517,33 +517,36 @@ namespace xgeom_static
 
         XPROPERTY_VDEF
         ( "GeomStatic", descriptor
-            , obj_member<"ImportAsset",         &descriptor::m_ImportAsset, member_ui<std::wstring>::file_dialog<mesh_filter_v, true, 1> >
-            , obj_member<"PreTranslation",      &descriptor::m_PreTranslation >
-            , obj_member<"bMergeAllMeshes",     &descriptor::m_bMergeAllMeshes >
+            , obj_member<"ImportAsset",         &descriptor::m_ImportAsset, member_ui<std::wstring>::file_dialog<mesh_filter_v, true, 1>, member_help<"Source mesh file to import (FBX or OBJ format)">>
+            , obj_member<"PreTranslation",      &descriptor::m_PreTranslation, member_help<"Transform applied to the geometry before processing (scale, rotate, translate)">>
+            , obj_member<"bMergeAllMeshes",     &descriptor::m_bMergeAllMeshes, member_help<"When enabled, all meshes are merged into a single mesh; when disabled, use Merge Group List and Ungroup Mesh List to organize">>
             , obj_member<"AllMeshesDetails",    &descriptor::m_AllMeshesDetails, member_ui_open<true>, member_dynamic_flags < +[](const descriptor& O)
             {
                 xproperty::flags::type Flags = {};
                 Flags.m_bDontShow = !O.m_bMergeAllMeshes;
                 return Flags;
-            }
+            }>
+            , member_help<"Settings for the single merged mesh when bMergeAllMeshes is enabled"
             >>
             , obj_member < "Merge Group List", &descriptor::m_MergeGroupList, member_dynamic_flags < +[](const descriptor& O)
             {
                 xproperty::flags::type Flags = {};
                 Flags.m_bDontShow = O.m_bMergeAllMeshes;
                 return Flags;
-            }
+            }>
+            , member_help<"List of mesh groups to merge separately; each group becomes its own mesh with its own LOD settings"
             >>
             , obj_member < "Ungroup Mesh List", &descriptor::m_UngroupMeshList, member_dynamic_flags < +[](const descriptor& O)
             {
                 xproperty::flags::type Flags = {};
                 Flags.m_bDontShow = O.m_bMergeAllMeshes;
                 return Flags;
-            }
+            }>
+            , member_help<"Meshes that are not in any group; these will be imported individually with their original hierarchy preserved"
             >>
-            , obj_member<"Deleted List", &descriptor::m_DeleteEntryList >
-            , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>>
-            , obj_member<"MaterialInstance", &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<> >
+            , obj_member<"Deleted List",        &descriptor::m_DeleteEntryList,                                     member_help<"List of nodes and meshes marked for deletion; these will not be included in the compiled geometry">>
+            , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>, member_help<"List of materials used by this geometry with usage counts (hidden by default)">>
+            , obj_member<"MaterialInstance",    &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<>, member_help<"References to material instances assigned to this geometry">>
         )
     };
     XPROPERTY_VREG(descriptor)

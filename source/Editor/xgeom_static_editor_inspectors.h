@@ -127,26 +127,25 @@ namespace xgeom_static_editor
         XPROPERTY_DEF
         ( "Render Settings", render_settings
         , obj_scope < "Camera Info"
-            , obj_member<"Position", +[](render_settings& O)->auto& { static xmath::fvec3 Pos; Pos = O.m_View.getPosition(); return Pos; }>
-            , obj_member<"Target",   &render_settings::m_CameraTarget >
-            , obj_action<"Recenter", &render_settings::Recenter>>
+            , obj_member<"Position", +[](render_settings& O)->auto& { static xmath::fvec3 Pos; Pos = O.m_View.getPosition(); return Pos; }, member_help<"Current camera position in world space">>
+            , obj_member<"Target",   &render_settings::m_CameraTarget, member_help<"Point the camera is looking at in world space">>
+            , obj_action<"Recenter", &render_settings::Recenter, member_help<"Reset camera to center on the geometry with optimal framing">>>
         , obj_scope< "Lighting Info"
-            , obj_member<"Direction",           &render_settings::m_LightDirection >
-            , obj_member<"Position",            &render_settings::m_LightPosition >
-            , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Hotkey: SPACE\n"
-                                                                                                    "By using this function the user can move the light in any direction by making the light be the camera"
-                                                                                                    "After the user is satisfy it can press SPACE again to freeze the light location."
-            >>
+            , obj_member<"Direction",           &render_settings::m_LightDirection, member_help<"Light direction vector (normalized) in world space">>
+            , obj_member<"Position",            &render_settings::m_LightPosition, member_help<"Light position in world space when not following camera">>
+            , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Hotkey: F\n"
+                                                                                                    "When enabled, the light moves with the camera for consistent shadow direction.\n"
+                                                                                                    "Press F to toggle: light follows camera (enabled) or stays fixed (disabled).">>
             >
         , obj_scope< "Debug Geometry"
-            , obj_member<"WireFrame",    &render_settings::m_bWireFrame >
-            , obj_member<"Tangents",     &render_settings::m_bTangents >
-            , obj_member<"Binormals",    &render_settings::m_bBinormals >
-            , obj_member<"Normals",      &render_settings::m_bNormals >
+            , obj_member<"WireFrame",    &render_settings::m_bWireFrame, member_help<"Render geometry in wireframe mode instead of shaded">>
+            , obj_member<"Tangents",     &render_settings::m_bTangents, member_help<"Render tangent vectors as debug lines (green) for tangent space visualization">>
+            , obj_member<"Binormals",    &render_settings::m_bBinormals, member_help<"Render binormal vectors as debug lines (blue) for tangent space visualization">>
+            , obj_member<"Normals",      &render_settings::m_bNormals, member_help<"Render normal vectors as debug lines (red) for surface normal visualization">>
             >
         , obj_scope < "Grid"
-            , obj_member<"SetToGeomYMin", &render_settings::m_bGridToYMin >
-            , obj_member<"GeomYMin",      &render_settings::m_GridYMin, member_flags<flags::SHOW_READONLY> >
+            , obj_member<"SetToGeomYMin", &render_settings::m_bGridToYMin, member_help<"Align grid plane to geometry's minimum Y position (ground level)">>
+            , obj_member<"GeomYMin",      &render_settings::m_GridYMin, member_flags<flags::SHOW_READONLY>, member_help<"Y coordinate where the grid plane is positioned when SetToGeomYMin is enabled">>
             >
         )
     };
@@ -165,9 +164,9 @@ namespace xgeom_static_editor
 
             XPROPERTY_DEF
             ( "Cluster", cluster
-            , obj_member<"nVertices", &cluster::m_nVertices >
-            , obj_member<"nFaces",    &cluster::m_nFaces >
-            , obj_member<"BBox",      &cluster::m_BBox >
+            , obj_member<"nVertices", &cluster::m_nVertices, member_help<"Number of vertices in this cluster">>
+            , obj_member<"nFaces",    &cluster::m_nFaces, member_help<"Number of faces (triangles) in this cluster">>
+            , obj_member<"BBox",      &cluster::m_BBox, member_help<"Axis-aligned bounding box containing this cluster">>
             )
         };
 
@@ -180,10 +179,10 @@ namespace xgeom_static_editor
 
             XPROPERTY_DEF
             ( "Submesh", submesh
-            , obj_member<"nVertices", &submesh::m_nVertices >
-            , obj_member<"nFaces",    &submesh::m_nFaces >
-            , obj_member<"Material",  &submesh::m_Material >
-            , obj_member<"Cluster",   &submesh::m_Cluster >
+            , obj_member<"nVertices", &submesh::m_nVertices, member_help<"Number of vertices in this submesh">>
+            , obj_member<"nFaces",    &submesh::m_nFaces, member_help<"Number of faces (triangles) in this submesh">>
+            , obj_member<"Material",  &submesh::m_Material, member_help<"Material instance applied to this submesh">>
+            , obj_member<"Cluster",   &submesh::m_Cluster, member_help<"List of clusters that make up this submesh">>
             )
         };
 
@@ -197,11 +196,11 @@ namespace xgeom_static_editor
 
             XPROPERTY_DEF
             ( "lod", lod
-            , obj_member<"nClusters",   &lod::m_nClusters >
-            , obj_member<"nVertices",   &lod::m_nVertices >
-            , obj_member<"nFaces",      &lod::m_nFaces >
-            , obj_member<"ScreenArea",  &lod::m_ScreenArea >
-            , obj_member<"Submesh",     &lod::m_Submesh >
+            , obj_member<"nClusters",   &lod::m_nClusters, member_help<"Number of clusters in this LOD level">>
+            , obj_member<"nVertices",   &lod::m_nVertices, member_help<"Number of vertices in this LOD level">>
+            , obj_member<"nFaces",      &lod::m_nFaces, member_help<"Number of faces (triangles) in this LOD level">>
+            , obj_member<"ScreenArea",  &lod::m_ScreenArea, member_help<"Screen area coverage for this LOD (used for LOD switching)">>
+            , obj_member<"Submesh",     &lod::m_Submesh, member_help<"List of submeshes at this LOD level">>
             )
         };
 
@@ -217,13 +216,13 @@ namespace xgeom_static_editor
 
             XPROPERTY_DEF
             ( "mesh", mesh
-            , obj_member<"Name",        &mesh::m_Name >
-            , obj_member<"BBox",        &mesh::m_BBox, member_ui_open<false> >
-            , obj_member<"nClusters",   &mesh::m_nClusters >
-            , obj_member<"nVertices",   &mesh::m_nVertices >
-            , obj_member<"nFaces",      &mesh::m_nFaces >
-            , obj_member<"nMaterials",  &mesh::m_nMaterials >
-            , obj_member<"LODs",        &mesh::m_LODs >
+            , obj_member<"Name",        &mesh::m_Name, member_help<"Name of this mesh">>
+            , obj_member<"BBox",        &mesh::m_BBox, member_ui_open<false>, member_help<"Axis-aligned bounding box containing this mesh">>
+            , obj_member<"nClusters",   &mesh::m_nClusters, member_help<"Total number of clusters across all LODs">>
+            , obj_member<"nVertices",   &mesh::m_nVertices, member_help<"Total number of vertices across all LODs">>
+            , obj_member<"nFaces",      &mesh::m_nFaces, member_help<"Total number of faces (triangles) across all LODs">>
+            , obj_member<"nMaterials",  &mesh::m_nMaterials, member_help<"Number of different materials used by this mesh">>
+            , obj_member<"LODs",        &mesh::m_LODs, member_help<"Level of Detail versions: lower LODs are simpler (fewer polygons) for distant rendering">>
             )
         };
 
@@ -234,8 +233,8 @@ namespace xgeom_static_editor
 
             XPROPERTY_DEF
             ( "stream_element", stream_element
-            , obj_member<"Type",        &stream_element::m_Type >
-            , obj_member<"Desciption",  &stream_element::m_Desciption >
+            , obj_member<"Type",        &stream_element::m_Type, member_help<"Data type and dimension (e.g., SINT16_3D, UINT16_2D)">>
+            , obj_member<"Desciption",  &stream_element::m_Desciption, member_help<"Description of what this element contains and how it's encoded">>
             )
         };
 
@@ -246,8 +245,8 @@ namespace xgeom_static_editor
 
             XPROPERTY_DEF
             ( "stream", stream
-            , obj_member<"Name",        &stream::m_Name >
-            , obj_member<"Elements",    &stream::m_Elements >
+            , obj_member<"Name",        &stream::m_Name, member_help<"Stream name: Position (coordinates) or Extras (UV, normals, tangents)">>
+            , obj_member<"Elements",    &stream::m_Elements, member_help<"List of data elements in this vertex stream">>
             )
         };
 
@@ -363,20 +362,20 @@ namespace xgeom_static_editor
 
         XPROPERTY_DEF
         ( "StaticGeom Inspector", static_geom_inspector
-        , obj_member<"RscGeom",         &static_geom_inspector::m_RscGeom, member_flags<flags::SHOW_READONLY> >
+        , obj_member<"RscGeom",         &static_geom_inspector::m_RscGeom, member_flags<flags::SHOW_READONLY>, member_help<"Reference to the static geometry resource">>
         , obj_scope< "Size"
-            , obj_member < "X", +[](static_geom_inspector& O, bool bRead, std::string& Val) { if (bRead) Val = FormatDistance(O.m_Size.m_X); } >
-            , obj_member < "Y", +[](static_geom_inspector& O, bool bRead, std::string& Val) { if (bRead) Val = FormatDistance(O.m_Size.m_Y); } >
-            , obj_member < "Z", +[](static_geom_inspector& O, bool bRead, std::string& Val) { if (bRead) Val = FormatDistance(O.m_Size.m_Z); } >
+            , obj_member < "X", +[](static_geom_inspector& O, bool bRead, std::string& Val) { if (bRead) Val = FormatDistance(O.m_Size.m_X); }, member_help<"Width of the geometry bounding box">>
+            , obj_member < "Y", +[](static_geom_inspector& O, bool bRead, std::string& Val) { if (bRead) Val = FormatDistance(O.m_Size.m_Y); }, member_help<"Height of the geometry bounding box">>
+            , obj_member < "Z", +[](static_geom_inspector& O, bool bRead, std::string& Val) { if (bRead) Val = FormatDistance(O.m_Size.m_Z); }, member_help<"Depth of the geometry bounding box">>
             , member_flags<flags::SHOW_READONLY>
             >
-        , obj_member<"nClusters", +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_nClusters, 0); }, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"nVertices", +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_nVertices, 0); }, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"nFaces",    +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_nFaces, 0);    }, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"FileSize",  +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_FileSize, 0) + " Bytes"; }, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"Meshes",          &static_geom_inspector::m_Mesh,          member_flags<flags::SHOW_READONLY> >
-        , obj_member<"VertexStreams",   &static_geom_inspector::m_VertexStreams, member_flags<flags::SHOW_READONLY> >
-        , obj_member<"Materials",       &static_geom_inspector::m_Materials,     member_flags<flags::SHOW_READONLY> >
+        , obj_member<"nClusters", +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_nClusters, 0); }, member_flags<flags::SHOW_READONLY>, member_help<"Number of clusters (renderable chunks) in the geometry">>
+        , obj_member<"nVertices", +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_nVertices, 0); }, member_flags<flags::SHOW_READONLY>, member_help<"Total number of vertices across all LODs">>
+        , obj_member<"nFaces",    +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_nFaces, 0);    }, member_flags<flags::SHOW_READONLY>, member_help<"Total number of faces (triangles) across all LODs">>
+        , obj_member<"FileSize",  +[](static_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = FormatNumber(O.m_FileSize, 0) + " Bytes"; }, member_flags<flags::SHOW_READONLY>, member_help<"Size of the compiled geometry file on disk">>
+        , obj_member<"Meshes",          &static_geom_inspector::m_Mesh,          member_flags<flags::SHOW_READONLY>, member_help<"List of meshes in the geometry, each containing multiple LODs">>
+        , obj_member<"VertexStreams",   &static_geom_inspector::m_VertexStreams, member_flags<flags::SHOW_READONLY>, member_help<"Vertex data layout: Position stream (coordinates) and Extras stream (UV, normals, tangents)">>
+        , obj_member<"Materials",       &static_geom_inspector::m_Materials,     member_flags<flags::SHOW_READONLY>, member_help<"References to material instances used by this geometry">>
         );
     };
     XPROPERTY_REG2(prop_cluster,            static_geom_inspector::cluster)

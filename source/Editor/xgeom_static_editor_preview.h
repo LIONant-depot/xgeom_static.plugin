@@ -400,7 +400,7 @@ namespace xgeom_static_editor::preview
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) S.m_LightFollowsCamera = !S.m_LightFollowsCamera;
+            if (ImGui::IsKeyPressed(ImGuiKey_F, false)) S.m_LightFollowsCamera = !S.m_LightFollowsCamera;
         }
 
         // The light's view: the geometry into the shadow map. Opens its own render pass on the window, so it must run before the frame's
