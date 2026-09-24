@@ -10,6 +10,7 @@
 #include "dependencies/xresource_pipeline_v2/source/editor/E10_InspectorPickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
 #include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_editor_preview.h"
+#include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_thumbnail.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/E10_Resources.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_xgpu_rsc_loader.cpp"      // the resource loader: compiled once, in the host's translation unit
 
@@ -413,6 +414,8 @@ namespace xgeom_static_editor
     , [](xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
       { return std::make_unique<session>(Guid, LibraryGuid, pDevice); }
     };
+
+    inline const xeditor::auto_register_thumbnail_renderer g_ThumbReg{ xrsc::geom_static_type_guid_v, []{ return std::make_unique<thumbnail_renderer>(); } };
 }
 
 #endif // XGEOM_STATIC_EDITOR_H
