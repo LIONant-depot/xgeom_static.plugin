@@ -365,6 +365,24 @@ namespace xgeom_static_editor::preview
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_F, false)) S.m_LightFollowsCamera = !S.m_LightFollowsCamera;
+
+            // WASD/QE fly, same extension as xeditor_tools::camera - kept as a local copy rather than
+            // inheriting that class here since render_settings is xproperty-reflected with its own field
+            // names (m_CameraTarget, no m_bReframe) shared with the thumbnail renderer; unifying that is
+            // its own separate pass.
+            if (!io.WantTextInput)
+            {
+                constexpr float FlySpeed = 1.0f;   // matches xeditor_tools::camera's own default
+                const float Speed = FlySpeed * std::max(S.m_Distance, 0.1f) * io.DeltaTime;
+                xmath::fvec3 Move(0, 0, 0);
+                if (ImGui::IsKeyDown(ImGuiKey_W)) Move += S.m_View.getWorldZVector();
+                if (ImGui::IsKeyDown(ImGuiKey_S)) Move -= S.m_View.getWorldZVector();
+                if (ImGui::IsKeyDown(ImGuiKey_A)) Move += S.m_View.getWorldXVector();
+                if (ImGui::IsKeyDown(ImGuiKey_D)) Move -= S.m_View.getWorldXVector();
+                if (ImGui::IsKeyDown(ImGuiKey_E)) Move += S.m_View.getWorldYVector();
+                if (ImGui::IsKeyDown(ImGuiKey_Q)) Move -= S.m_View.getWorldYVector();
+                if (Move.Length() > 0.0f) S.m_CameraTarget += Move.Normalize() * Speed;
+            }
         }
 
         // The light's view: the geometry into the shadow map. Opens its own render pass on the window, so it must run before the frame's
