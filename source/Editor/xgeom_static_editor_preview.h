@@ -5,9 +5,9 @@
 // The Static Geom editor's 3D preview: the geometry lit with a shadow map (the light's view is rendered first, into its own
 // texture), plus wire frame, tangent/binormal/normal lines and a grid. RenderShadow runs before the frame's UI is drawn (it opens its
 // own render pass on the window); Draw runs from the panel's render callback, inside the window's own pass.
-#include "source/Examples/E19_MaterialEditor/E19_mesh_manager.h"
 #include "source/tools/xgpu_imgui_breach.h"
 #include "source/tools/xgpu_xcore_bitmap_helpers.h"
+#include "dependencies/xeditor_tools/src/xeditor_tools_grid.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
@@ -33,14 +33,6 @@ namespace xgeom_static_editor::preview
     constexpr static std::uint32_t g_ShadowVertShader[] =
     {
         #include "GeomStaticShadowMapCreation_vert.h"
-    };
-    constexpr static std::uint32_t g_GridVertShader[] =
-    {
-        #include "E21_GridShader_vert.h"
-    };
-    constexpr static std::uint32_t g_GridFragShader[] =
-    {
-        #include "E21_GridShader_frag.h"
     };
     constexpr static std::uint32_t g_WireframeFragShader[] =
     {
@@ -101,15 +93,6 @@ namespace xgeom_static_editor::preview
         xmath::fmat4  m_w2C;
     };
 
-    struct alignas(256) ubo_grid
-    {
-        xmath::fmat4    m_L2W;
-        xmath::fmat4    m_W2C;
-        xmath::fmat4    m_L2CTShadow;
-        xmath::fvec3    m_WorldSpaceCameraPos = xmath::fvec3(0.0f, 10.0f, 0.0f);
-        float           m_MajorGridDiv = 10.0f;
-    };
-
     struct push_const
     {
         std::uint32_t   m_ClusterIndex;         // which cluster the draw is for
@@ -126,14 +109,16 @@ namespace xgeom_static_editor::preview
         // Frame state RenderShadow leaves for Draw
         xmath::fmat4                m_ShadowL2C;
 
-        xgpu::vertex_descriptor     m_PrimitiveVD, m_GeomVD, m_ShadowVD;
-        xgpu::buffer                m_MeshUBO, m_LightUBO, m_NormalUBO, m_ShadowUBO, m_WireUBO, m_GridUBO;
-        xgpu::pipeline              m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline, m_GridPipeline;
-        xgpu::pipeline_instance     m_NormalInstance, m_ShadowInstance, m_WireInstance, m_GridInstance;
-        xgpu::renderpass            m_ShadowPass;
-        xgpu::texture               m_ShadowMap;
+        xgpu::vertex_descriptor     m_GeomVD, m_ShadowVD;
+        xgpu::buffer                m_MeshUBO, m_LightUBO, m_NormalUBO, m_ShadowUBO, m_WireUBO;
+        xgpu::pipeline              m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline;
+        xgpu::pipeline_instance     m_NormalInstance, m_ShadowInstance, m_WireInstance;
         xgpu::texture               m_DefaultTexture;
-        e19::mesh_manager           m_Meshes;
+
+        // The ground grid and the shadow map this runtime's own shadow-caster pipeline (m_ShadowPipeline
+        // above) draws into - shared with every other 3D editor viewport via xeditor_tools, instead of
+        // this runtime's own now-removed copy of the grid pipeline/shader/vertex-descriptor/mesh.
+        xeditor_tools::grid         m_Grid;
 
         // One entry per material of the compiled geometry; an entry stays invalid when its material could not be built.
         std::vector<xgpu::pipeline_instance>        m_MatInstances;
@@ -163,22 +148,14 @@ namespace xgeom_static_editor::preview
             if (m_bReady) return true;
             m_pDevice = &Device;
             m_Settings.clear();
-            m_Meshes.Init(Device);
+            if (!m_Grid.Init(Device, true)) return false;   // always shadow-enabled here - both the interactive preview and the thumbnail need a real shadow
 
             auto UBO = [&](xgpu::buffer& B, int Size, int Count) { return Ok(Device.Create(B, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = Size, .m_EntryCount = Count })); };
             if (!UBO(m_MeshUBO,   sizeof(ubo_geom_static_mesh),  100) || !UBO(m_LightUBO, sizeof(ubo_lighting),        100)
              || !UBO(m_NormalUBO, sizeof(ubo_debug_normal),      100) || !UBO(m_ShadowUBO,sizeof(ubo_shadow_generation),100)
-             || !UBO(m_WireUBO,   sizeof(ubo_wireframe),         100) || !UBO(m_GridUBO,  sizeof(ubo_grid),             10)) return false;
+             || !UBO(m_WireUBO,   sizeof(ubo_wireframe),         100)) return false;
 
-            // Vertex layouts: the grid's primitive, the compiled geometry (position stream + extras stream), position only for the shadow/wire passes
-            {
-                auto Attributes = std::array
-                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(e19::draw_vert, m_X),     .m_Format = xgpu::vertex_descriptor::format::FLOAT_3D }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(e19::draw_vert, m_U),     .m_Format = xgpu::vertex_descriptor::format::FLOAT_2D }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(e19::draw_vert, m_Color), .m_Format = xgpu::vertex_descriptor::format::UINT8_4D_NORMALIZED }
-                };
-                if (!Ok(Device.Create(m_PrimitiveVD, xgpu::vertex_descriptor::setup{ .m_VertexSize = sizeof(e19::draw_vert), .m_Attributes = Attributes }))) return false;
-            }
+            // Vertex layout for the compiled geometry (position stream + extras stream), position only for the shadow/wire passes
             {
                 auto Attributes = std::array
                 { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_static::geom::vertex, m_XPos),            .m_Format = xgpu::vertex_descriptor::format::SINT16_4D, .m_iStream = 0 }
@@ -246,12 +223,6 @@ namespace xgeom_static_editor::preview
                 if (!Ok(Device.Create(m_ShadowInstance, { .m_PipeLine = m_ShadowPipeline }))) return false;
             }
 
-            if (!Ok(Device.Create(m_ShadowMap, { .m_Format = xgpu::texture::format::DEPTH_U16, .m_Width = 1024, .m_Height = 1024, .m_isGamma = false }))) return false;
-            {
-                std::array<xgpu::renderpass::attachment, 1> Attachments{ m_ShadowMap };
-                if (!Ok(Device.Create(m_ShadowPass, { .m_Attachments = Attachments }))) return false;
-            }
-
             // Wire frame
             {
                 xgpu::shader Frag, Vert, Geom;
@@ -263,21 +234,6 @@ namespace xgeom_static_editor::preview
                 auto Binds   = std::array{ MeshBind, ClusterBind };
                 if (!Ok(Device.Create(m_WirePipeline, xgpu::pipeline::setup{ .m_VertexDescriptor = m_ShadowVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(push_const), .m_UniformBinds = Binds, .m_Blend = xgpu::pipeline::blend::getAlphaOriginal() }))) return false;
                 if (!Ok(Device.Create(m_WireInstance, { .m_PipeLine = m_WirePipeline }))) return false;
-            }
-
-            // Grid (receives the shadow)
-            {
-                xgpu::shader Vert, Frag;
-                if (!Ok(Device.Create(Vert, ShaderSetup(xgpu::shader::type::bit::VERTEX,   g_GridVertShader)))) return false;
-                if (!Ok(Device.Create(Frag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_GridFragShader)))) return false;
-
-                auto Binds    = std::array{ xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true, .m_bFragment = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC } };
-                auto Samplers = std::array{ xgpu::pipeline::sampler{ .m_AddressMode = std::array{ xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP } } };
-                auto Shaders  = std::array<const xgpu::shader*, 2>{ &Frag, &Vert };
-                if (!Ok(Device.Create(m_GridPipeline, xgpu::pipeline::setup{ .m_VertexDescriptor = m_PrimitiveVD, .m_Shaders = Shaders, .m_UniformBinds = Binds, .m_Samplers = Samplers, .m_Blend = xgpu::pipeline::blend::getAlphaOriginal() }))) return false;
-
-                auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_ShadowMap } };
-                if (!Ok(Device.Create(m_GridInstance, { .m_PipeLine = m_GridPipeline, .m_SamplersBindings = Bindings }))) return false;
             }
 
             // What geometry without a material is drawn with
@@ -309,7 +265,7 @@ namespace xgeom_static_editor::preview
                 // geometry itself should still render with something instead of silently vanishing.
                 const auto UseDefaultMaterial = [&]
                 {
-                    auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_ShadowMap }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }
+                    auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_Grid.m_ShadowMap }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }
                                               , xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture } };
                     m_MatValid[Index] = Ok(m_pDevice->Create(m_MatInstances[Index], { .m_PipeLine = m_Pipeline3D, .m_SamplersBindings = Bindings }));
                 };
@@ -327,7 +283,7 @@ namespace xgeom_static_editor::preview
                 bool bTextures = true;
                 for (auto& E : pMI->getTextures())
                 {
-                    if (&E == pMI->getTextures().data()) { Binds.emplace_back(m_ShadowMap); continue; }
+                    if (&E == pMI->getTextures().data()) { Binds.emplace_back(m_Grid.m_ShadowMap); continue; }
                     auto* pTexture = xresource::g_Mgr.getResource(E.m_TexureRef);
                     if (!pTexture) { bTextures = false; break; }
                     Binds.emplace_back(*pTexture);
@@ -372,9 +328,10 @@ namespace xgeom_static_editor::preview
         ~runtime() noexcept
         {
             ReleaseMaterials();
-            xeditor::DestroyGpu( m_pDevice, m_NormalInstance, m_ShadowInstance, m_WireInstance, m_GridInstance
-                               , m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline, m_GridPipeline
-                               , m_ShadowPass, m_ShadowMap, m_DefaultTexture );
+            xeditor::DestroyGpu( m_pDevice, m_NormalInstance, m_ShadowInstance, m_WireInstance
+                               , m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline
+                               , m_DefaultTexture );
+            m_Grid.Release();
         }
 
         // Right drag turns the camera, middle drag pans, the wheel zooms, Space lets the light follow the camera.
@@ -417,7 +374,7 @@ namespace xgeom_static_editor::preview
             if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f) return;
             auto& S = m_Settings;
 
-            S.m_LightingView.setViewport({ 0, 0, m_ShadowMap.getTextureDimensions()[0], m_ShadowMap.getTextureDimensions()[1] });
+            S.m_LightingView.setViewport({ 0, 0, m_Grid.m_ShadowMap.getTextureDimensions()[0], m_Grid.m_ShadowMap.getTextureDimensions()[1] });
             S.m_View.setViewport({ 0, 0, static_cast<int>(ViewW), static_cast<int>(ViewH) });
 
             if (S.m_LightFollowsCamera)
@@ -440,7 +397,7 @@ namespace xgeom_static_editor::preview
                 if (S.m_Distance == -1) S.m_LightPosition = S.m_LightingView.getPosition();
             }
 
-            auto CmdBuffer = Window.StartRenderPass(m_ShadowPass);
+            auto CmdBuffer = Window.StartRenderPass(m_Grid.m_ShadowPass);
 
             std::array StaticUBO{ &Geom.ClusterBuffer() };
             CmdBuffer.setPipelineInstance(m_ShadowInstance, StaticUBO);
@@ -558,17 +515,8 @@ namespace xgeom_static_editor::preview
 
             // The grid sits at the bottom of the geometry
             {
-                CmdBuffer.setPipelineInstance(m_GridInstance);
-
                 S.m_GridYMin = S.m_bGridToYMin ? Geom.m_BBox.m_Min.m_Y : 0;
-                auto& Uniform = m_GridUBO.allocEntry<ubo_grid>();
-                Uniform.m_WorldSpaceCameraPos = S.m_View.getPosition();
-                Uniform.m_L2W        = xmath::fmat4(xmath::fvec3(100.f, 100.0f, 1.f), xmath::radian3(-90_xdeg, 0_xdeg, 0_xdeg), xmath::fvec3(0, S.m_GridYMin, 0));
-                Uniform.m_W2C        = S.m_View.getW2C();
-                Uniform.m_L2CTShadow = ClipToTexture * m_ShadowL2C * Uniform.m_L2W;
-                CmdBuffer.setDynamicUBO(m_GridUBO, 0);
-                m_Meshes.Rendering(CmdBuffer, e19::mesh_manager::model::PLANE3D);
-
+                m_Grid.Draw(CmdBuffer, S.m_View.getW2C(), S.m_View.getPosition(), m_ShadowL2C, S.m_GridYMin);
                 S.m_GridYMin = Geom.m_BBox.m_Min.m_Y;       // the property shows where the geometry ends, whatever the grid does
             }
 
