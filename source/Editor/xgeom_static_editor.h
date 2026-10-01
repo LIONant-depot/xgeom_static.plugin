@@ -301,6 +301,7 @@ namespace xgeom_static_editor
             // theme's plain dark panel color instead. The grid itself is untouched.
             ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetCursorScreenPos(), ImGui::GetCursorScreenPos() + Avail, IM_COL32(115, 115, 115, 255));
             ImGui::InvisibleButton("##GeomPreviewCanvas", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+            xeditor::PreviewGestures();
             m_Preview.HandleInput();
 
             auto* pHost   = xeditor::host::current();
