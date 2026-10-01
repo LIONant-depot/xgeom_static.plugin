@@ -36,27 +36,27 @@ namespace xgeom_static_editor::preview
     };
     constexpr static std::uint32_t g_WireframeFragShader[] =
     {
-        #include "E21_WireFrame_frag.h"
+        #include "xgeom_static_wireframe_frag.h"
     };
     constexpr static std::uint32_t g_WireframeVertShader[] =
     {
-        #include "E21_WireFrame_vert.h"
+        #include "xgeom_static_wireframe_vert.h"
     };
     constexpr static std::uint32_t g_WireframeGeomShader[] =
     {
-        #include "E21_WireFrame_geom.h"
+        #include "xgeom_static_wireframe_geom.h"
     };
     constexpr static std::uint32_t g_DebugNormalFragShader[] =
     {
-        #include "E21_DebugNormalRender_frag.h"
+        #include "xgeom_static_debug_normal_frag.h"
     };
     constexpr static std::uint32_t g_DebugNormalVertShader[] =
     {
-        #include "E21_DebugNormalRender_vert.h"
+        #include "xgeom_static_debug_normal_vert.h"
     };
     constexpr static std::uint32_t g_DebugNormalGeomShader[] =
     {
-        #include "E21_DebugNormalRender_geom.h"
+        #include "xgeom_static_debug_normal_geom.h"
     };
 
     struct alignas(256) ubo_geom_static_mesh

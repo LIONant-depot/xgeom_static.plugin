@@ -7,11 +7,11 @@
 // to its statistics. Hosts include this header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_camera.h"
-#include "dependencies/xresource_pipeline_v2/source/editor/E10_InspectorPickers.h"
+#include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
 #include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_editor_preview.h"
 #include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_thumbnail.h"
-#include "dependencies/xresource_pipeline_v2/source/editor/E10_Resources.h"
+#include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_xgpu_rsc_loader.cpp"      // the resource loader: compiled once, in the host's translation unit
 
 #include <charconv>
@@ -159,7 +159,7 @@ namespace xgeom_static_editor
         xrsc::geom_static                   m_GeomRef;
         bool                                m_bHasGeom = false;         // the compiled geometry is loaded and drawable
 
-        session(xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
+        session(xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
             : descriptor_editor("StaticGeom", Guid, LibraryGuid, pDevice)
             , m_AddToNewGroup   (m_Undo, m_Document, m_Details, "AddNodeToNewGroup",  "Puts a node in a new merge group (undoable). Usage: AddNodeToNewGroup -Node base64",            &AddToNewGroup,   false)
             , m_AddToGroup      (m_Undo, m_Document, m_Details, "AddNodeToGroup",     "Puts a node in a merge group (undoable). Usage: AddNodeToGroup -Node base64 -Group index",      &AddToGroup,      true)
@@ -172,7 +172,7 @@ namespace xgeom_static_editor
             , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); } })
         {
             for (auto* pInspector : { &m_DescriptorInspector.m_Inspector, &m_SettingsInspector.m_Inspector })
-                e10::WireResourcePickerCallbacks(*pInspector);
+                xresource_editor::WireResourcePickerCallbacks(*pInspector);
             RegisterMaterialRowLabels(m_DescriptorInspector.m_Inspector);
 
             m_Preview.m_Settings.clear();
@@ -282,7 +282,7 @@ namespace xgeom_static_editor
             auto* pWindow = pHost ? pHost->find<xgpu::window>() : nullptr;
             auto* pGeom   = m_bHasGeom ? xresource::g_Mgr.getResource(m_GeomRef) : nullptr;
 
-            if (!m_Preview.m_bReady || !pWindow) { ImGui::TextDisabled("Preview needs a GPU device (open from E29)."); return; }
+            if (!m_Preview.m_bReady || !pWindow) { ImGui::TextDisabled("Preview needs a GPU device (open from the editor)."); return; }
             if (!pGeom)                          { ImGui::TextUnformatted("No compiled resource yet (compile the geometry)."); return; }
 
             m_Preview.RenderShadow(*pWindow, *pGeom, Avail.x, Avail.y);
@@ -419,7 +419,7 @@ namespace xgeom_static_editor
 
     inline const xeditor::auto_register_resource_editor g_Registration
     { xrsc::geom_static_type_guid_v
-    , [](xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
+    , [](xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
       { return std::make_unique<session>(Guid, LibraryGuid, pDevice); }
     };
 
