@@ -334,7 +334,7 @@ namespace xgeom_static_editor::preview
             m_Grid.Release();
         }
 
-        // Right drag turns the camera, middle drag pans, the wheel zooms, Space lets the light follow the camera.
+        // Right drag turns the camera, middle drag pans, the wheel zooms; the light-follows-camera key is an action (GeomStatic/Preview/LightFollowsCamera).
         // Call right after the preview canvas item was submitted.
         void HandleInput() noexcept
         {
@@ -364,7 +364,7 @@ namespace xgeom_static_editor::preview
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_F, false)) S.m_LightFollowsCamera = !S.m_LightFollowsCamera;
+            // F (light follows the camera) is the GeomStatic/Preview/LightFollowsCamera action (xgeom_static_editor.h).
 
             // WASD/QE fly, same extension as xeditor_tools::camera - kept as a local copy rather than
             // inheriting that class here since render_settings is xproperty-reflected with its own field

@@ -133,9 +133,9 @@ namespace xgeom_static_editor
         , obj_scope< "Lighting Info"
             , obj_member<"Direction",           &render_settings::m_LightDirection, member_help<"Light direction vector (normalized) in world space">>
             , obj_member<"Position",            &render_settings::m_LightPosition, member_help<"Light position in world space when not following camera">>
-            , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Hotkey: F\n"
+            , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Has a key of its own (see Project Settings > Keymap: GeomStatic/Preview/LightFollowsCamera).\n"
                                                                                                     "When enabled, the light moves with the camera for consistent shadow direction.\n"
-                                                                                                    "Press F to toggle: light follows camera (enabled) or stays fixed (disabled).">>
+                                                                                                    "Disabled: the light stays where it is.">>
             >
         , obj_scope< "Debug Geometry"
             , obj_member<"WireFrame",    &render_settings::m_bWireFrame, member_help<"Render geometry in wireframe mode instead of shaded">>

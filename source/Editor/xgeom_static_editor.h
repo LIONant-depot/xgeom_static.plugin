@@ -6,6 +6,7 @@
 // inspector and through the node commands (merge groups, deleted nodes), all undoable; the compiled geometry is previewed in 3D next
 // to its statistics. Hosts include this header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
+#include "dependencies/xeditor/include/xeditor/hint.h"
 #include "source/Tools/Editor/xeditor_camera.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
@@ -143,6 +144,28 @@ namespace xgeom_static_editor
     //--------------------------------------------------------------------------------------------
     // The editor
     //--------------------------------------------------------------------------------------------
+    // The Static Geom editor's own actions (Preview/...): keys that act on its 3D preview.
+    struct session;
+    struct geom_static_actions
+    {
+        session* m_pS = nullptr;
+        geom_static_actions() noexcept = default;
+        explicit geom_static_actions(session& S) noexcept : m_pS(&S) {}
+
+        void LightFollowsCamera() noexcept;
+
+        XPROPERTY_DEF
+        ( "GeomStatic", geom_static_actions
+        , obj_scope<"Preview"
+            , obj_action<"LightFollowsCamera", &geom_static_actions::LightFollowsCamera
+                , member_help<"The light of the preview follows the camera, or stays where it is">
+                , ximgui::actions::member_keys<"F"> >
+            >
+        )
+    };
+    XPROPERTY_REG(geom_static_actions)
+    XIMGUI_ACTIONS_OWNER(geom_static_actions)
+
     struct session : xeditor::descriptor_editor
     {
         xgeom_static::details               m_Details;                  // the scene nodes, from the compiler's log (empty until the first compile)
@@ -150,6 +173,8 @@ namespace xgeom_static_editor
         list_nodes_cmd                      m_ListNodes;
 
         preview::runtime                    m_Preview;
+        geom_static_actions                 m_EditorActions{ *this };       // this editor's own keys (Preview/...)
+        void RegisterActions(ximgui::actions::context& Ctx) noexcept override { Ctx.Scope(m_EditorActions, "Preview"); }
         static_geom_inspector               m_Info;
         xeditor::set_preview_cmd<render_settings>  m_SetPreview;
         xeditor::list_preview_cmd<render_settings> m_ListPreview;
@@ -384,7 +409,7 @@ namespace xgeom_static_editor
                         ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(Index)), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen, "\xEE\xAF\x92 %s", Mesh.m_Name.c_str());
                         if (ImGui::IsItemHovered())
                         {
-                            ImGui::BeginTooltip();
+                            xeditor::hint::PlaceAwayFromEdges(16.0f, ImVec2(380.0f, 220.0f)); ImGui::BeginTooltip();
                             ImGui::PushStyleColor(ImGuiCol_Text, TextColor);
                             ImGui::Text("nFaces    : %d\nnUVs      : %d\nnColors   : %d\nnMaterials: %d\n", Mesh.m_NumFaces, Mesh.m_NumUVs, Mesh.m_NumColors, static_cast<int>(Mesh.m_MaterialList.size()));
                             for (auto& Mat : Mesh.m_MaterialList)
@@ -416,6 +441,11 @@ namespace xgeom_static_editor
             if (!Pending.empty()) xeditor::Run(m_Undo, Pending);
         }
     };
+
+    inline void geom_static_actions::LightFollowsCamera() noexcept
+    {
+        m_pS->m_Preview.m_Settings.m_LightFollowsCamera = !m_pS->m_Preview.m_Settings.m_LightFollowsCamera;
+    }
 
     inline const xeditor::auto_register_resource_editor g_Registration
     { xrsc::geom_static_type_guid_v
