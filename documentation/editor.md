@@ -21,7 +21,7 @@ The generic half (document, `SetProperty`, `Save`, `Compile`, `Undo`, the window
 
 ## Commands
 
-Run as `<resource name>\<Command>` (see `list`) or `ResourceEditorCommand -Asset <guid> -Cmd <base64>`. Paths, values and node paths are base64.
+Run as `<resource name>\<Command>` (see `list`) or `ResourceEditorCommand -Asset <guid> -Cmd "<command>"`. Paths, values and node paths are text, in quotes.
 
 | Command | |
 |---|---|
