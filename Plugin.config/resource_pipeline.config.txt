@@ -2,10 +2,12 @@
 // New Types
 < s32:d u32:g s16:C u16:H s8:c u8:h f32:f f64:F string:s wstring:S u64:G s64:D bool:c enum:s >
 
-[ xProperties : 9 ]
+[ xProperties : 11 ]
 { Name:s                            Value:?                   }
 //--------------------------------  -------------------------
   "PipelinePlugin/TypeName"                  ;string "GeomStatic"    
+  "PipelinePlugin/Group"                     ;string "Geometry"
+  "PipelinePlugin/Description"               ;string "A static mesh: geometry that does not deform."
   "PipelinePlugin/FileExtension"             ;wstring "xgeom"               
   "PipelinePlugin/TypeGUID/Value"            ;u64    #E5359948C52D26D1
   "PipelinePlugin/IconPaths[]"                      ;s64    1
