@@ -2,7 +2,7 @@
 #define XGEOM_STATIC_XGPU_RUNTIME
 #pragma once
 
-#include "source/xgpu.h"
+#include "source/xGPU.h"
 #include "xgeom_static.h"
 
 namespace xgeom_static::xgpu

@@ -4,7 +4,7 @@
 
 // What the Static Geom editor shows next to the descriptor: the view settings (camera, light, debug geometry, grid) and the
 // read-only facts about the compiled geometry (sizes, counts, meshes, vertex streams, materials).
-#include "source/tools/xgpu_view.h"
+#include "source/Tools/xgpu_view.h"
 #include "dependencies/xproperty/source/xcore/my_properties.h"
 #include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
 #include "dependencies/xresource_mgr/source/xresource_mgr.h"

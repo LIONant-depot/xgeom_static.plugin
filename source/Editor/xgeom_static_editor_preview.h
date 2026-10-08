@@ -5,8 +5,8 @@
 // The Static Geom editor's 3D preview: the geometry lit with a shadow map (the light's view is rendered first, into its own
 // texture), plus wire frame, tangent/binormal/normal lines and a grid. RenderShadow runs before the frame's UI is drawn (it opens its
 // own render pass on the window); Draw runs from the panel's render callback, inside the window's own pass.
-#include "source/tools/xgpu_imgui_breach.h"
-#include "source/tools/xgpu_xcore_bitmap_helpers.h"
+#include "source/Tools/xgpu_imgui_breach.h"
+#include "source/Tools/xgpu_xcore_bitmap_helpers.h"
 #include "dependencies/xeditor_tools/src/xeditor_tools_grid.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
