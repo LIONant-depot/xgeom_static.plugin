@@ -82,7 +82,9 @@ namespace xgeom_static_editor::preview
         xmath::fvec4 m_Color;
     };
 
-    struct ubo_shadow_generation
+    // alignas(256) like the others: a UBO entry must be a multiple of minUniformBufferOffsetAlignment - 64 on NVIDIA, 256 on Mesa's D3D12
+    // driver under WSL, where this one (64 bytes) made Init fail, so the preview and every thumbnail never initialized
+    struct alignas(256) ubo_shadow_generation
     {
         xmath::fmat4    m_L2C;
     };
