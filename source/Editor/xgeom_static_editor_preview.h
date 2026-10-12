@@ -413,13 +413,6 @@ namespace xgeom_static_editor::preview
 
             RenderShadow(Window, Geom, ViewW, ViewH);
 
-            static const xmath::fmat4 ClipToTexture = []
-            {
-                xmath::fmat4 M;
-                M.setupSRT({ 0.5f, 0.5f, 1.0f }, { 0_xdeg }, { 0.5f, 0.5f, 0.0f });
-                return M;
-            }();
-
             if (S.m_Distance == -1)
             {
                 // Fit the geometry in the view
@@ -433,13 +426,13 @@ namespace xgeom_static_editor::preview
 
             S.m_View.LookAt(S.m_Distance, S.m_Angles, S.m_CameraTarget);
 
-            // The same light the preview always had: a warm point light, softened by its area, with a soft fill
+            // A warm directional key light along the preview's light direction (the renderer's shadow clipmap shadows it; its level-0 tiles
+            // are sized to the geometry), with a soft fill
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
             Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials });
-            Scene.m_Light     = { .m_Position = S.m_LightPosition, .m_Radius = Radius * 5, .m_AreaRadius = Radius * 0.5f, .m_Temperature = 6500, .m_Intensity = 4 };
-            Scene.m_Ambient   = { 0.7f, 0.7f, 0.7f };
-            Scene.m_W2ShadowT = ClipToTexture * m_ShadowL2C;
+            Scene.m_Light   = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
+            Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
         }
