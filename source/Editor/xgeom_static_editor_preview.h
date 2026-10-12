@@ -21,10 +21,6 @@
 
 namespace xgeom_static_editor::preview
 {
-    constexpr static std::uint32_t g_FallbackFragShader[] =
-    {
-        #include "xgeom_static_preview_fallback_frag.h"
-    };
     constexpr static std::uint32_t g_ShadowFragShader[] =
     {
         #include "GeomStaticShadowMapCreation_frag.h"
@@ -99,7 +95,6 @@ namespace xgeom_static_editor::preview
         xgpu::pipeline              m_NormalPipeline, m_ShadowPipeline, m_WirePipeline;
         xgpu::pipeline_instance     m_NormalInstance, m_ShadowInstance, m_WireInstance;
         xgpu::texture               m_DefaultTexture;
-        xgpu::shader                m_FallbackFrag;         // HDR shader for a submesh whose material does not resolve
 
         // The renderer the lit geometry goes through (one instance per runtime: the preview and each thumbnail renderer own theirs)
         xlionrender::instance                   m_Renderer;
@@ -142,7 +137,6 @@ namespace xgeom_static_editor::preview
 
             if (!Ok(m_Renderer.Init(Device))) return false;
             m_RenderView.m_Background = { 0.45f, 0.45f, 0.45f, 1.0f };     // the grey the preview and the thumbnails always had
-            if (!Ok(Device.Create(m_FallbackFrag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_FallbackFragShader)))) return false;
 
             auto UBO = [&](xgpu::buffer& B, int Size, int Count) { return Ok(Device.Create(B, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = Size, .m_EntryCount = Count })); };
             if (!UBO(m_NormalUBO, sizeof(ubo_debug_normal),      100) || !UBO(m_ShadowUBO,sizeof(ubo_shadow_generation),100)
@@ -224,12 +218,12 @@ namespace xgeom_static_editor::preview
 
         // The renderer's mesh and materials for the geometry (called after every (re)load of the compiled resource). The mesh
         // references the geometry's own GPU buffers; each material slot gets the material's HDR shader with the shadow map in
-        // slot 0 and the material instance's textures after it, or the fallback shader when anything does not resolve.
+        // slot 0 and the material instance's textures after it, or the renderer's default material when anything does not resolve.
         void RebuildMaterials(geom& Geom) noexcept
         {
             ReleaseMaterials();
             m_Renderer.DestroyMesh(m_Mesh);
-            (void)Ok(m_Renderer.CreateStaticGeom(m_Mesh, xlionrender::MakeStaticGeom(Geom)));
+            (void)Ok(m_Renderer.CreateClusterGeom(m_Mesh, xlionrender::MakeClusterGeom(Geom)));
 
             const auto Materials = Geom.getDefaultMaterialInstances();
             m_MatRefs.resize(Materials.size());
@@ -245,7 +239,7 @@ namespace xgeom_static_editor::preview
                 const auto UseDefaultMaterial = [&]
                 {
                     const auto Textures = std::array<xgpu::texture*, 4>{ &m_Grid.m_ShadowMap, &m_DefaultTexture, &m_DefaultTexture, &m_DefaultTexture };
-                    (void)Ok(m_Renderer.CreateMaterial(m_Materials[Index], m_FallbackFrag, Textures));
+                    (void)Ok(m_Renderer.CreateDefaultMaterial(m_Materials[Index], Textures));
                 };
 
                 if (MI.empty()) { UseDefaultMaterial(); continue; }
