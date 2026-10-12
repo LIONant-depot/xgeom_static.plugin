@@ -299,6 +299,7 @@ namespace xgeom_static_editor
         void RenderPreview() noexcept
         {
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
+            const ImVec2 Min   = ImGui::GetCursorScreenPos();
             // Flat fill behind the grid, matching GeomSkin/Skeleton's preview background - without this,
             // whatever the grid plane doesn't cover (most of the frame, at this camera framing) shows the
             // theme's plain dark panel color instead. The grid itself is untouched.
@@ -314,12 +315,15 @@ namespace xgeom_static_editor
             if (!m_Preview.m_bReady || !pWindow) { ImGui::TextDisabled("Preview needs a GPU device (open from the editor)."); return; }
             if (!pGeom)                          { ImGui::TextUnformatted("No compiled resource yet (compile the geometry)."); return; }
 
-            m_Preview.RenderShadow(*pWindow, *pGeom, Avail.x, Avail.y);
-            xgpu::tools::imgui::AddCustomRenderCallback([this, Avail](xgpu::cmd_buffer& CmdBuffer, const ImVec2&, const ImVec2&)
+            // Drawn by xLIONRender into the preview's own view, then blitted as is into the panel (ImGui::Image would gamma encode
+            // the already display-encoded output again). The clip rect is the viewport the render callback gets.
+            m_Preview.Render(*pWindow, *pGeom, Avail.x, Avail.y);
+            ImGui::PushClipRect(Min, Min + Avail, true);
+            xgpu::tools::imgui::AddCustomRenderCallback([this](xgpu::cmd_buffer& CmdBuffer, const ImVec2&, const ImVec2&)
             {
-                if (!m_bOpen || !m_bHasGeom) return;
-                if (auto* p = xresource::g_Mgr.getResource(m_GeomRef)) m_Preview.Draw(CmdBuffer, *p, Avail.x, Avail.y);
+                if (m_bOpen) m_Preview.m_Renderer.Blit(CmdBuffer, m_Preview.m_RenderView);
             });
+            ImGui::PopClipRect();
         }
 
         // The scene nodes. Right click: merge groups and deleting. Every action is a command, run once the tree is drawn.

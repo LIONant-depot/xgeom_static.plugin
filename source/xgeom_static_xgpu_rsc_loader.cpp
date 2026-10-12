@@ -92,10 +92,14 @@ void xresource::loader< xrsc::geom_static_type_guid_v >::Destroy(xresource::mgr&
 {
     auto& UserData = Mgr.getUserData<resource_mgr_user_data>();
 
-    // Release all the buffers
-    UserData.m_Device.Destroy(std::move(Data.VertexBuffer()));
-    UserData.m_Device.Destroy(std::move(Data.VertexExtrasBuffer()));
-    UserData.m_Device.Destroy(std::move(Data.IndexBuffer()));
+    // Release all the buffers. They live in the geom's raw runtime memory, which is freed below without running destructors, and
+    // xgpu::buffer has no move: Destroy(std::move(B)) queued a copy and left B's reference behind, so all four leaked. Taking the
+    // handle out releases it through the device's deferred destroy.
+    for (auto* pBuffer : { &Data.VertexBuffer(), &Data.VertexExtrasBuffer(), &Data.IndexBuffer(), &Data.ClusterBuffer() })
+    {
+        xgpu::buffer Released;
+        Released.m_Private.swap(pBuffer->m_Private);
+    }
 
     // Release all the material instance references
     for (auto& E : Data.getDefaultMaterialInstances())

@@ -35,21 +35,12 @@ namespace xgeom_static_editor
         {
             if (m_bReady) return true;
             if (!m_Runtime.Init(Device)) return false;
-
-            const int Cell = static_cast<int>(s_CellPixels);
-            if (!Ok(Device.Create(m_ColorTarget, { .m_Format = xgpu::texture::format::R8G8B8A8_UNORM, .m_Width = Cell, .m_Height = Cell, .m_isGamma = false }))) return false;
-            if (!Ok(Device.Create(m_DepthTarget, { .m_Format = xgpu::texture::format::DEPTH_U16,      .m_Width = Cell, .m_Height = Cell, .m_isGamma = false }))) return false;
-            {
-                auto Attachments = std::array<xgpu::renderpass::attachment, 2>{ { m_ColorTarget, m_DepthTarget } };
-                if (!Ok(Device.Create(m_Pass, { .m_Attachments = Attachments }))) return false;
-            }
-
             m_bReady = true;
             return true;
         }
 
         // Polled once per tick (see xeditor_thumbnail.h's contract) until it returns true with OutBitmap
-        // filled in. Serialized to one guid at a time (m_ColorTarget/m_DepthTarget are a single reused
+        // filled in. Serialized to one guid at a time (m_Runtime's render view is a single reused
         // render target, not one per in-flight guid) - a call for a different guid while still busy just
         // says "not yet".
         bool Render(xgpu::device& Device, xgpu::window& Window, xresource::full_guid Guid, xbitmap& OutBitmap) noexcept override
@@ -103,16 +94,11 @@ namespace xgeom_static_editor
             // handed in by the old shared cache; now that this renderer owns and sequences its own passes
             // end-to-end, shadow-then-main is exactly the same two-separate-passes-per-frame shape the
             // interactive preview panel already uses (RenderShadow, then later Draw, from RenderPreview()).
-            m_Runtime.RenderShadow(Window, *pGeom, s_CellPixels, s_CellPixels);
+            // Shadow map, lit geometry (xLIONRender) and overlays, each its own render pass, all ended when Render returns
+            m_Runtime.Render(Window, *pGeom, s_CellPixels, s_CellPixels);
+            if (!m_Runtime.m_RenderView.m_Output.m_Private) return false;
 
-            {
-                // cmd_buffer's own destructor ends the render pass (same RAII shape E22_FramebufferTarget.cpp
-                // relies on) - scoped so it ends BEFORE the readback below is requested.
-                auto CmdBuffer = Window.StartRenderPass(m_Pass);
-                m_Runtime.Draw(CmdBuffer, *pGeom, s_CellPixels, s_CellPixels);
-            }
-
-            (void)Window.ReadbackTexture(m_ColorTarget, m_ReadbackPixels, m_ReadbackWidth, m_ReadbackHeight, m_bReadbackDone);
+            (void)Window.ReadbackTexture(m_Runtime.m_RenderView.m_Output, m_ReadbackPixels, m_ReadbackWidth, m_ReadbackHeight, m_bReadbackDone);
             m_bBusy    = true;
             m_BusyGuid = Guid;
             return false;
@@ -154,9 +140,6 @@ namespace xgeom_static_editor
         preview::runtime                                         m_Runtime;
         bool                                                     m_bReady = false;
 
-        xgpu::texture                                            m_ColorTarget;
-        xgpu::texture                                            m_DepthTarget;
-        xgpu::renderpass                                         m_Pass;
         bool                                                     m_bBusy          = false;
         xresource::full_guid                                     m_BusyGuid       {};
         std::vector<std::uint32_t>                               m_ReadbackPixels;

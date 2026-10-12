@@ -3,9 +3,12 @@
 #pragma once
 
 // The Static Geom editor's 3D preview: the geometry lit with a shadow map (the light's view is rendered first, into its own
-// texture), plus wire frame, tangent/binormal/normal lines and a grid. RenderShadow runs before the frame's UI is drawn (it opens its
-// own render pass on the window); Draw runs from the panel's render callback, inside the window's own pass.
+// texture), plus wire frame, tangent/binormal/normal lines and a grid. The lit geometry is drawn by xLIONRender (the materials'
+// HDR variants, tone mapped by the renderer) into this runtime's render_view; the editor's overlays (grid, wire frame, lines) are
+// drawn over the tone-mapped image with the scene's depth. Render opens its own render passes on the window, so it runs before
+// the frame's UI is rendered; the panel then shows the view's output texture.
 #include "source/Tools/xgpu_imgui_breach.h"
+#include "dependencies/xLIONRender/src/xlionrender.h"
 #include "source/Tools/xgpu_xcore_bitmap_helpers.h"
 #include "dependencies/xeditor_tools/src/xeditor_tools_grid.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
@@ -18,13 +21,9 @@
 
 namespace xgeom_static_editor::preview
 {
-    constexpr static std::uint32_t g_GeomStaticFragShader[] =
+    constexpr static std::uint32_t g_FallbackFragShader[] =
     {
-        #include "GeomStaticBasicShader_frag.h"
-    };
-    constexpr static std::uint32_t g_GeomStaticVertShader[] =
-    {
-        #include "GeomStaticBasicShader_vert.h"
+        #include "xgeom_static_preview_fallback_frag.h"
     };
     constexpr static std::uint32_t g_ShadowFragShader[] =
     {
@@ -57,22 +56,6 @@ namespace xgeom_static_editor::preview
     constexpr static std::uint32_t g_DebugNormalGeomShader[] =
     {
         #include "xgeom_static_debug_normal_geom.h"
-    };
-
-    struct alignas(256) ubo_geom_static_mesh
-    {
-        xmath::fmat4  m_L2w;
-        xmath::fmat4  m_w2C;
-        xmath::fmat4  m_w2ShadowT;
-    };
-
-    struct alignas(256) ubo_lighting
-    {
-        xmath::fvec4  m_LightColor;
-        xmath::fvec4  m_AmbientLightColor;
-        xmath::fvec4  m_wSpaceLightPos;
-        xmath::fvec4  m_wSpaceEyePos;
-        xmath::fvec4  m_LightParams;            // .x=area radius (spec/soft shadow approx), .y=temperature (Kelvin), .z=intensity mult, .w=spare
     };
 
     struct alignas(256) ubo_debug_normal
@@ -112,19 +95,24 @@ namespace xgeom_static_editor::preview
         xmath::fmat4                m_ShadowL2C;
 
         xgpu::vertex_descriptor     m_GeomVD, m_ShadowVD;
-        xgpu::buffer                m_MeshUBO, m_LightUBO, m_NormalUBO, m_ShadowUBO, m_WireUBO;
-        xgpu::pipeline              m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline;
+        xgpu::buffer                m_NormalUBO, m_ShadowUBO, m_WireUBO;
+        xgpu::pipeline              m_NormalPipeline, m_ShadowPipeline, m_WirePipeline;
         xgpu::pipeline_instance     m_NormalInstance, m_ShadowInstance, m_WireInstance;
         xgpu::texture               m_DefaultTexture;
+        xgpu::shader                m_FallbackFrag;         // HDR shader for a submesh whose material does not resolve
+
+        // The renderer the lit geometry goes through (one instance per runtime: the preview and each thumbnail renderer own theirs)
+        xlionrender::instance                   m_Renderer;
+        xlionrender::render_view                m_RenderView;
+        xlionrender::mesh_id                    m_Mesh;
+        std::vector<xlionrender::material_id>   m_Materials;    // one per material slot of the geometry
 
         // The ground grid and the shadow map this runtime's own shadow-caster pipeline (m_ShadowPipeline
         // above) draws into - shared with every other 3D editor viewport via xeditor_tools, instead of
         // this runtime's own now-removed copy of the grid pipeline/shader/vertex-descriptor/mesh.
         xeditor_tools::grid         m_Grid;
 
-        // One entry per material of the compiled geometry; an entry stays invalid when its material could not be built.
-        std::vector<xgpu::pipeline_instance>        m_MatInstances;
-        std::vector<bool>                           m_MatValid;
+        // The material instances the geometry references, held while m_Materials uses their shaders and textures
         std::vector<xrsc::material_instance_ref>    m_MatRefs;
 
         static bool Ok(xgpu::device::error* pErr) noexcept
@@ -152,9 +140,12 @@ namespace xgeom_static_editor::preview
             m_Settings.clear();
             if (!m_Grid.Init(Device, true)) return false;   // always shadow-enabled here - both the interactive preview and the thumbnail need a real shadow
 
+            if (!Ok(m_Renderer.Init(Device))) return false;
+            m_RenderView.m_Background = { 0.45f, 0.45f, 0.45f, 1.0f };     // the grey the preview and the thumbnails always had
+            if (!Ok(Device.Create(m_FallbackFrag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_FallbackFragShader)))) return false;
+
             auto UBO = [&](xgpu::buffer& B, int Size, int Count) { return Ok(Device.Create(B, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = Size, .m_EntryCount = Count })); };
-            if (!UBO(m_MeshUBO,   sizeof(ubo_geom_static_mesh),  100) || !UBO(m_LightUBO, sizeof(ubo_lighting),        100)
-             || !UBO(m_NormalUBO, sizeof(ubo_debug_normal),      100) || !UBO(m_ShadowUBO,sizeof(ubo_shadow_generation),100)
+            if (!UBO(m_NormalUBO, sizeof(ubo_debug_normal),      100) || !UBO(m_ShadowUBO,sizeof(ubo_shadow_generation),100)
              || !UBO(m_WireUBO,   sizeof(ubo_wireframe),         100)) return false;
 
             // Vertex layout for the compiled geometry (position stream + extras stream), position only for the shadow/wire passes
@@ -173,21 +164,7 @@ namespace xgeom_static_editor::preview
 
             // The uniform bindings every geometry pipeline shares: per-draw mesh block, and the cluster table
             auto MeshBind    = xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true },   .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC };
-            auto LightBind   = xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bFragment = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC };
             auto ClusterBind = xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = xgpu::shader::type{ xgpu::shader::type::bit::VERTEX }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC };
-
-            // Geometry with no material of its own
-            {
-                xgpu::shader Frag, Vert;
-                if (!Ok(Device.Create(Frag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_GeomStaticFragShader)))) return false;
-                if (!Ok(Device.Create(Vert, ShaderSetup(xgpu::shader::type::bit::VERTEX,   g_GeomStaticVertShader)))) return false;
-
-                auto Shaders  = std::array<const xgpu::shader*, 2>{ &Frag, &Vert };
-                auto Clamp    = xgpu::pipeline::sampler{ .m_AddressMode = std::array{ xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP } };
-                auto Samplers = std::array{ Clamp, xgpu::pipeline::sampler{}, xgpu::pipeline::sampler{}, xgpu::pipeline::sampler{} };      // shadow map, normal, albedo, ORME
-                auto Binds    = std::array{ MeshBind, LightBind, ClusterBind };
-                if (!Ok(Device.Create(m_Pipeline3D, xgpu::pipeline::setup{ .m_VertexDescriptor = m_GeomVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(push_const), .m_UniformBinds = Binds, .m_Samplers = Samplers }))) return false;
-            }
 
             // Tangent / binormal / normal lines
             {
@@ -245,31 +222,30 @@ namespace xgeom_static_editor::preview
             return true;
         }
 
-        // The pipeline instances the geometry's materials draw with (called after every (re)load of the compiled resource).
+        // The renderer's mesh and materials for the geometry (called after every (re)load of the compiled resource). The mesh
+        // references the geometry's own GPU buffers; each material slot gets the material's HDR shader with the shadow map in
+        // slot 0 and the material instance's textures after it, or the fallback shader when anything does not resolve.
         void RebuildMaterials(geom& Geom) noexcept
         {
             ReleaseMaterials();
+            m_Renderer.DestroyMesh(m_Mesh);
+            (void)Ok(m_Renderer.CreateStaticGeom(m_Mesh, xlionrender::MakeStaticGeom(Geom)));
+
             const auto Materials = Geom.getDefaultMaterialInstances();
-            m_MatInstances.resize(Materials.size());
             m_MatRefs.resize(Materials.size());
-            m_MatValid.assign(Materials.size(), false);
+            m_Materials.resize(Materials.size());
 
             for (auto& MI : Materials)
             {
                 const auto Index = static_cast<int>(&MI - Materials.data());
                 xresource::g_Mgr.CloneRef(m_MatRefs[Index], MI);
 
-                // Used both for a genuinely empty ref AND for a non-empty one that fails to resolve at
-                // any step below (the material instance itself, its material, or one of its textures) -
-                // those used to just `continue` with m_MatValid[Index] left false, which Draw() reads as
-                // "skip this submesh entirely". A resolution failure is exactly the "no default
-                // material" case this fallback already existed for, just reached a different way; the
-                // geometry itself should still render with something instead of silently vanishing.
+                // An empty ref, or one that fails to resolve at any step below (the material instance, its material, one of its
+                // textures), draws with the fallback - the geometry should still render with something instead of vanishing.
                 const auto UseDefaultMaterial = [&]
                 {
-                    auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_Grid.m_ShadowMap }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }
-                                              , xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture }, xgpu::pipeline_instance::sampler_binding{ m_DefaultTexture } };
-                    m_MatValid[Index] = Ok(m_pDevice->Create(m_MatInstances[Index], { .m_PipeLine = m_Pipeline3D, .m_SamplersBindings = Bindings }));
+                    const auto Textures = std::array<xgpu::texture*, 4>{ &m_Grid.m_ShadowMap, &m_DefaultTexture, &m_DefaultTexture, &m_DefaultTexture };
+                    (void)Ok(m_Renderer.CreateMaterial(m_Materials[Index], m_FallbackFrag, Textures));
                 };
 
                 if (MI.empty()) { UseDefaultMaterial(); continue; }
@@ -280,58 +256,36 @@ namespace xgeom_static_editor::preview
                 if (!pMat) { UseDefaultMaterial(); continue; }
 
                 // Slot 0 of every material is the shadow map; the others are the material instance's textures
-                std::vector<xgpu::pipeline_instance::sampler_binding> Binds;
-                Binds.reserve(pMI->m_nTexturesList);
+                std::vector<xgpu::texture*> Textures;
+                Textures.reserve(pMI->m_nTexturesList);
                 bool bTextures = true;
                 for (auto& E : pMI->getTextures())
                 {
-                    if (&E == pMI->getTextures().data()) { Binds.emplace_back(m_Grid.m_ShadowMap); continue; }
+                    if (&E == pMI->getTextures().data()) { Textures.push_back(&m_Grid.m_ShadowMap); continue; }
                     auto* pTexture = xresource::g_Mgr.getResource(E.m_TexureRef);
                     if (!pTexture) { bTextures = false; break; }
-                    Binds.emplace_back(*pTexture);
+                    Textures.push_back(pTexture);
                 }
-                if (!bTextures) { UseDefaultMaterial(); continue; }
+                if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
-                // A material's pipeline is built the first time it is used with static geometry
-                auto& PipeLine = pMat->getPipeline(0);
-                if (!PipeLine.m_Private)
-                {
-                    xgpu::shader Vert;
-                    if (!Ok(m_pDevice->Create(Vert, ShaderSetup(xgpu::shader::type::bit::VERTEX, g_GeomStaticVertShader)))) continue;
-
-                    std::vector<xgpu::pipeline::sampler> Samplers;
-                    Samplers.reserve(Binds.size());
-                    for (size_t i = 0; i < Binds.size(); ++i)
-                    {
-                        if (i == 0) Samplers.push_back(xgpu::pipeline::sampler{ .m_AddressMode = std::array{ xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP } });
-                        else        Samplers.push_back({});
-                    }
-
-                    auto Shaders = std::array<const xgpu::shader*, 2>{ &pMat->getShader(), &Vert };
-                    auto Binds3D = std::array{ xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true },   .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
-                                             , xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bFragment = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
-                                             , xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = xgpu::shader::type{ xgpu::shader::type::bit::VERTEX }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC } };
-                    if (!Ok(m_pDevice->Create(PipeLine, xgpu::pipeline::setup{ .m_VertexDescriptor = m_GeomVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(push_const), .m_UniformBinds = Binds3D, .m_Samplers = Samplers }))) continue;
-                }
-
-                m_MatValid[Index] = Ok(m_pDevice->Create(m_MatInstances[Index], { .m_PipeLine = PipeLine, .m_SamplersBindings = Binds }));
+                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures))) UseDefaultMaterial();
             }
         }
 
         void ReleaseMaterials() noexcept
         {
-            if (m_pDevice) for (auto& E : m_MatInstances) m_pDevice->Destroy(std::move(E));
+            for (auto& E : m_Materials) m_Renderer.DestroyMaterial(E);
             for (auto& E : m_MatRefs) xresource::g_Mgr.ReleaseRef(E);
-            m_MatInstances.clear();
+            m_Materials.clear();
             m_MatRefs.clear();
-            m_MatValid.clear();
         }
 
         ~runtime() noexcept
         {
             ReleaseMaterials();
+            if (m_bReady) m_Renderer.DestroyView(m_RenderView);
             xeditor::DestroyGpu( m_pDevice, m_NormalInstance, m_ShadowInstance, m_WireInstance
-                               , m_Pipeline3D, m_NormalPipeline, m_ShadowPipeline, m_WirePipeline
+                               , m_NormalPipeline, m_ShadowPipeline, m_WirePipeline
                                , m_DefaultTexture );
             m_Grid.Release();
         }
@@ -451,11 +405,19 @@ namespace xgeom_static_editor::preview
                     }
         }
 
-        // The lit geometry with the wire frame, debug lines and the grid over it. From inside the panel's render callback.
-        void Draw(xgpu::cmd_buffer& CmdBuffer, geom& Geom, float ViewW, float ViewH) noexcept
+        // The geometry through xLIONRender into m_RenderView (ViewW x ViewH): the shadow map first, then the lit geometry, then the
+        // editor's overlays over the tone-mapped image. Opens render passes on the window: call before the frame's UI is rendered,
+        // then show m_RenderView.m_Output with m_Renderer.Blit (display encoded already, not ImGui::Image).
+        void Render(xgpu::window& Window, geom& Geom, float ViewW, float ViewH) noexcept
         {
-            if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f) return;
+            if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f || !m_Mesh.isValid()) return;
             auto& S = m_Settings;
+
+            const int W = static_cast<int>(ViewW), H = static_cast<int>(ViewH);
+            if (m_RenderView.m_Width != W || m_RenderView.m_Height != H)
+                if (!Ok(m_Renderer.CreateView(m_RenderView, { .m_Width = W, .m_Height = H }))) return;
+
+            RenderShadow(Window, Geom, ViewW, ViewH);
 
             static const xmath::fmat4 ClipToTexture = []
             {
@@ -477,49 +439,25 @@ namespace xgeom_static_editor::preview
 
             S.m_View.LookAt(S.m_Distance, S.m_Angles, S.m_CameraTarget);
 
+            // The same light the preview always had: a warm point light, softened by its area, with a soft fill
+            const float Radius = Geom.m_BBox.getRadius();
+            xlionrender::scene Scene;
+            Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials });
+            Scene.m_Light     = { .m_Position = S.m_LightPosition, .m_Radius = Radius * 5, .m_AreaRadius = Radius * 0.5f, .m_Temperature = 6500, .m_Intensity = 4 };
+            Scene.m_Ambient   = { 0.7f, 0.7f, 0.7f };
+            Scene.m_W2ShadowT = ClipToTexture * m_ShadowL2C;
+
+            m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
+        }
+
+        // The wire frame, the grid and the tangent/binormal/normal lines, in display colors over the tone-mapped image
+        void DrawOverlays(xgpu::cmd_buffer& CmdBuffer, geom& Geom) noexcept
+        {
+            auto& S = m_Settings;
+
             // Everything is drawn relative to the camera
-            const auto L2w = xmath::fmat4::fromTranslation(-S.m_View.getPosition()) * xmath::fmat4::fromTranslation({ 0, 0, 0 });
+            const auto L2w = xmath::fmat4::fromTranslation(-S.m_View.getPosition());
             const auto w2C = S.m_View.getW2C() * xmath::fmat4::fromTranslation(S.m_View.getPosition());
-
-            // The lit geometry
-            {
-                CmdBuffer.setStreamingBuffers({ &Geom.IndexBuffer(), 3 });
-
-                auto& MeshUBO       = m_MeshUBO.allocEntry<ubo_geom_static_mesh>();
-                MeshUBO.m_L2w       = L2w;
-                MeshUBO.m_w2C       = w2C;
-                MeshUBO.m_w2ShadowT = ClipToTexture * m_ShadowL2C;
-
-                auto& Lighting               = m_LightUBO.allocEntry<ubo_lighting>();
-                Lighting.m_LightColor        = xmath::fvec4(1) * 4;
-                Lighting.m_AmbientLightColor = xmath::fvec4(1) * 0.7f;
-                Lighting.m_wSpaceLightPos    = xmath::fvec4(S.m_LightPosition - S.m_View.getPosition(), Geom.m_BBox.getRadius() * 5);
-                Lighting.m_wSpaceEyePos      = xmath::fvec4(0);
-                Lighting.m_LightParams.m_X   = Lighting.m_wSpaceLightPos.m_W * 0.1f;
-                Lighting.m_LightParams.m_Y   = 6500;         // temperature
-                Lighting.m_LightParams.m_Z   = 1;            // intensity boost
-                Lighting.m_LightParams.m_W   = 0;
-
-                for (auto& M : Geom.getMeshes())
-                    for (auto& L : Geom.getLODs().subspan(M.m_iLOD, M.m_nLODs))
-                        for (auto& Sub : Geom.getSubmeshes().subspan(L.m_iSubmesh, L.m_nSubmesh))
-                        {
-                            if (Sub.m_iMaterial >= m_MatValid.size() || !m_MatValid[Sub.m_iMaterial]) continue;
-
-                            std::array StaticUBO{ &Geom.ClusterBuffer() };
-                            CmdBuffer.setPipelineInstance(m_MatInstances[Sub.m_iMaterial], StaticUBO);
-                            CmdBuffer.setDynamicUBO(m_MeshUBO, 0);
-                            CmdBuffer.setDynamicUBO(m_LightUBO, 1);
-
-                            push_const PushConstant{ Sub.m_iCluster };
-                            for (auto& C : Geom.getClusters().subspan(Sub.m_iCluster, Sub.m_nCluster))
-                            {
-                                CmdBuffer.setPushConstants(PushConstant);
-                                CmdBuffer.Draw(C.m_nIndices, C.m_iIndex, C.m_iVertex);
-                                PushConstant.m_ClusterIndex++;
-                            }
-                        }
-            }
 
             if (S.m_bWireFrame)
             {
