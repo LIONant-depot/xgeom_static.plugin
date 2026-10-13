@@ -1102,6 +1102,12 @@ void ConvertToCompilerMesh(void)
             m_FinalGeom.m_pGISurfel  = new geom::gi_surfel[m_FinalGeom.m_nGISurfels + m_FinalGeom.m_nGIParents];
             for (std::size_t i = 0; i < M.m_Levels[0].size(); ++i) m_FinalGeom.m_pGISurfel[i] = ToSurfel(M.m_Levels[0][i], M.m_ParentOf[i]);
             for (std::size_t i = 0; i < M.m_Levels[1].size(); ++i) m_FinalGeom.m_pGISurfel[m_FinalGeom.m_nGISurfels + i] = ToSurfel(M.m_Levels[1][i], 0);
+            m_FinalGeom.m_pGISurfelMaterial = new geom::gi_surfel_material[m_FinalGeom.m_nGISurfels];
+            for (std::size_t i = 0; i < M.m_SurfelMaterial.size() && i < m_FinalGeom.m_nGISurfels; ++i)
+            {
+                const auto& S = M.m_SurfelMaterial[i];
+                m_FinalGeom.m_pGISurfelMaterial[i] = { S.m_U, S.m_V, S.m_UVRadius, S.m_iMaterial };
+            }
             m_FinalGeom.m_pGIVertSurfel = new std::uint16_t[4 * std::size_t(m_FinalGeom.m_nVertices)];
             for (std::size_t v = 0; v < m_FinalGeom.m_nVertices; ++v)
                 for (int k = 0; k < 4; ++k) m_FinalGeom.m_pGIVertSurfel[4 * v + k] = M.m_VertSurfels[v][k] < 0 ? std::uint16_t(0xFFFF) : std::uint16_t(M.m_VertSurfels[v][k]);

@@ -14,7 +14,7 @@ namespace xgeom_static
 
     struct geom
     {
-        inline static constexpr auto xserializer_version_v = 2;    // 2: the GI surfels
+        inline static constexpr auto xserializer_version_v = 3;    // 2: the GI surfels, 3: where each samples its material
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -91,6 +91,14 @@ namespace xgeom_static
             std::uint32_t           m_iParent;                  // fine: its parent (an index into the parents); parent: 0
         };
 
+        // Where a fine GI surfel samples its material (its color: the material there, over its footprint): the slot, the UV of its center,
+        // the UV radius of its footprint
+        struct gi_surfel_material
+        {
+            float                   m_U, m_V, m_UVRadius;
+            std::uint32_t           m_iMaterial;
+        };
+
         using runtime_allocation =std::array<std::size_t, 4*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
 
         //-------------------------------------------------------------------------
@@ -112,6 +120,7 @@ namespace xgeom_static
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
         inline std::span<gi_surfel>                     getGISurfels                (void)                              const   noexcept { return { m_pGISurfel, m_nGISurfels }; }
         inline std::span<gi_surfel>                     getGIParents                (void)                              const   noexcept { return { m_pGISurfel + m_nGISurfels, m_nGIParents }; }
+        inline std::span<gi_surfel_material>            getGISurfelMaterials        (void)                              const   noexcept { return { m_pGISurfelMaterial, m_pGISurfelMaterial ? m_nGISurfels : 0u }; }
         inline std::span<std::uint16_t>                 getGIVertexSurfels          (void)                              const   noexcept { return { m_pGIVertSurfel, m_pGIVertSurfel ? 4 * std::size_t(m_nVertices) : 0 }; }
 
         xmath::fbbox                    m_BBox;
@@ -136,6 +145,7 @@ namespace xgeom_static
         std::uint16_t                   m_nDefaultMaterialInstances;
         gi_surfel*                      m_pGISurfel;            // m_nGISurfels fine ones, then m_nGIParents parents
         std::uint16_t*                  m_pGIVertSurfel;        // per vertex (the GPU buffer's order) its 4 nearest fine surfels, 0xFFFF: none
+        gi_surfel_material*             m_pGISurfelMaterial;    // per fine surfel
         std::uint32_t                   m_nGISurfels;
         std::uint32_t                   m_nGIParents;
         gi_mode                         m_GIMode;
@@ -165,6 +175,7 @@ namespace xgeom_static
         if (m_pDefaultMaterialInstances)    delete[] m_pDefaultMaterialInstances;
         if (m_pGISurfel)                    delete[] m_pGISurfel;
         if (m_pGIVertSurfel)                delete[] m_pGIVertSurfel;
+        if (m_pGISurfelMaterial)            delete[] m_pGISurfelMaterial;
         if (m_pData)                       delete[] m_pData;
 
         Initialize();
@@ -288,6 +299,20 @@ namespace xserializer::io_functions
 
     //-------------------------------------------------------------------------
     template<> inline
+    xerr SerializeIO<xgeom_static::geom::gi_surfel_material>(xserializer::stream& Stream, const xgeom_static::geom::gi_surfel_material& M) noexcept
+    {
+        xerr Err;
+        false
+            || (Err = Stream.Serialize(M.m_U))
+            || (Err = Stream.Serialize(M.m_V))
+            || (Err = Stream.Serialize(M.m_UVRadius))
+            || (Err = Stream.Serialize(M.m_iMaterial))
+            ;
+        return Err;
+    }
+
+    //-------------------------------------------------------------------------
+    template<> inline
     xerr SerializeIO<xgeom_static::geom>(xserializer::stream& Stream, const xgeom_static::geom& Geom) noexcept
     {
         xerr Err;
@@ -321,6 +346,7 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_nGIParents))
             || (Err = Stream.Serialize(Geom.m_pGISurfel,                    Geom.m_pGISurfel ? Geom.m_nGISurfels + Geom.m_nGIParents : 0u))
             || (Err = Stream.Serialize(Geom.m_pGIVertSurfel,                Geom.getGIVertexSurfels().size()))
+            || (Err = Stream.Serialize(Geom.m_pGISurfelMaterial,            Geom.getGISurfelMaterials().size()))
             || (Err = Stream.Serialize(Geom.m_GIMode))
             ;
         return Err;
