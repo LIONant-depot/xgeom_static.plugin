@@ -98,6 +98,7 @@ namespace xgeom_static_editor
             m_LightDirection.NormalizeSafe();
 
             m_bWireFrame = m_bTangents = m_bBinormals = m_bNormals = m_LightFollowsCamera = false;
+            m_GIView      = gi_view::OFF;
             m_bGridToYMin = true;
             m_GridYMin    = {};
         }
@@ -120,6 +121,14 @@ namespace xgeom_static_editor
         bool                m_bTangents;
         bool                m_bBinormals;
         bool                m_bNormals;
+        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT };
+        static constexpr auto gi_view_v = std::array
+        { xproperty::settings::enum_item("OFF",     gi_view::OFF,     "No GI: the key light and the flat fill only")
+        , xproperty::settings::enum_item("GI",      gi_view::GI,      "Lit with the GI of the geometry's own surfels (the sky and the key light bounce)")
+        , xproperty::settings::enum_item("SURFELS", gi_view::SURFELS, "Every pixel in the color of the surfel it reads most: the surfels' placement and reach (black: no surfel reaches it)")
+        , xproperty::settings::enum_item("LIGHT",   gi_view::LIGHT,   "The GI light alone: no textures, no direct light")
+        };
+        gi_view             m_GIView;
         bool                m_LightFollowsCamera;
         bool                m_bGridToYMin;
         float               m_GridYMin;
@@ -142,6 +151,7 @@ namespace xgeom_static_editor
             , obj_member<"Tangents",     &render_settings::m_bTangents, member_help<"Render tangent vectors as debug lines (green) for tangent space visualization">>
             , obj_member<"Binormals",    &render_settings::m_bBinormals, member_help<"Render binormal vectors as debug lines (blue) for tangent space visualization">>
             , obj_member<"Normals",      &render_settings::m_bNormals, member_help<"Render normal vectors as debug lines (red) for surface normal visualization">>
+            , obj_member<"GI",           &render_settings::m_GIView, member_enum_span<render_settings::gi_view_v>, member_help<"The surfel GI baked into the geometry: lit by it, or its debug views (the surfels, the GI light alone)">>
             >
         , obj_scope < "Grid"
             , obj_member<"SetToGeomYMin", &render_settings::m_bGridToYMin, member_help<"Align grid plane to geometry's minimum Y position (ground level)">>

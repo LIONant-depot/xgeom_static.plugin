@@ -100,6 +100,7 @@ namespace xgeom_static_editor::preview
         xlionrender::instance                   m_Renderer;
         xlionrender::render_view                m_RenderView;
         xlionrender::mesh_id                    m_Mesh;
+        bool                                    m_bGIReady = false;     // the mesh has its surfels (the first GI view after a load)
         std::vector<xlionrender::material_id>   m_Materials;    // one per material slot of the geometry
 
         // The ground grid and the shadow map this runtime's own shadow-caster pipeline (m_ShadowPipeline
@@ -224,6 +225,7 @@ namespace xgeom_static_editor::preview
             ReleaseMaterials();
             m_Renderer.DestroyMesh(m_Mesh);
             (void)Ok(m_Renderer.CreateClusterGeom(m_Mesh, xlionrender::MakeClusterGeom(Geom)));
+            m_bGIReady = false;
 
             const auto Materials = Geom.getDefaultMaterialInstances();
             m_MatRefs.resize(Materials.size());
@@ -430,7 +432,22 @@ namespace xgeom_static_editor::preview
             // are sized to the geometry), with a soft fill
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
-            Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials });
+            Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials, .m_Instance = 1 });
+
+            // The GI views: the surfels the compiler baked (the first time one is asked for after a load), solved every frame
+            if (S.m_GIView != render_settings::gi_view::OFF)
+            {
+                if (!m_bGIReady)
+                {
+                    m_bGIReady = true;
+                    xlionrender::gi::surfel_mesh Surfels;
+                    xlionrender::gi::FromXGeomStatic(Surfels, Geom);
+                    if (xlionrender::gi::SurfelsFromXGeomStatic(Surfels, Geom) && Surfels.m_Levels[0].size() < 0xFFFF) (void)m_Renderer.SetMeshGI(m_Mesh, std::move(Surfels));
+                }
+                using dbg = xlionrender::gi_debug;
+                Scene.m_GI = { .m_bEnable = true, .m_RayBudget = 1 << 16
+                             , .m_Debug = S.m_GIView == render_settings::gi_view::SURFELS ? dbg::SURFELS : S.m_GIView == render_settings::gi_view::LIGHT ? dbg::LIGHT : dbg::NONE };
+            }
             Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
