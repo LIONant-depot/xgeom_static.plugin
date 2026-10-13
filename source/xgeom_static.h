@@ -8,9 +8,13 @@
 
 namespace xgeom_static
 {
+    // The GI a geometry takes part in (xLIONRender's surfel GI): none, it receives (its surfels are lit, it is not in the rays' way), or it
+    // receives and bounces (the rays of every mesh see it: it occludes and colors its neighbors)
+    enum class gi_mode : std::uint8_t { OFF, RECEIVE, RECEIVE_AND_BOUNCE };
+
     struct geom
     {
-        inline static constexpr auto xserializer_version_v = 1;
+        inline static constexpr auto xserializer_version_v = 2;    // 2: the GI surfels
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -78,7 +82,16 @@ namespace xgeom_static
             std::array<std::uint8_t, 2>     m_OctTangent;
         };
 
-        using runtime_allocation = std::array<std::size_t, 4*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
+        // A GI surfel, mesh space (the compiler's bake: xlionrender::gi::surfel_mesh::Bake). The fine ones first, then their parents (the LOD)
+        struct gi_surfel
+        {
+            vec3                    m_Center;
+            float                   m_Radius;
+            vec3                    m_Normal;
+            std::uint32_t           m_iParent;                  // fine: its parent (an index into the parents); parent: 0
+        };
+
+        using runtime_allocation =std::array<std::size_t, 4*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
 
         //-------------------------------------------------------------------------
 
@@ -97,6 +110,9 @@ namespace xgeom_static
         inline std::span<std::uint16_t>                 getIndices                  (void)                              const   noexcept { return { reinterpret_cast<std::uint16_t*>(m_pData + m_IndicesOffset),        m_nIndices  }; }
         inline std::span<cluster_data>                  getClusterData              (void)                              const   noexcept { return { reinterpret_cast<cluster_data*> (m_pData + m_ClusterDataOffset),    m_nClusters }; }
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
+        inline std::span<gi_surfel>                     getGISurfels                (void)                              const   noexcept { return { m_pGISurfel, m_nGISurfels }; }
+        inline std::span<gi_surfel>                     getGIParents                (void)                              const   noexcept { return { m_pGISurfel + m_nGISurfels, m_nGIParents }; }
+        inline std::span<std::uint16_t>                 getGIVertexSurfels          (void)                              const   noexcept { return { m_pGIVertSurfel, m_pGIVertSurfel ? 4 * std::size_t(m_nVertices) : 0 }; }
 
         xmath::fbbox                    m_BBox;
         char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
@@ -118,6 +134,11 @@ namespace xgeom_static
         std::uint32_t                   m_nIndices;
         std::uint32_t                   m_nVertices;
         std::uint16_t                   m_nDefaultMaterialInstances;
+        gi_surfel*                      m_pGISurfel;            // m_nGISurfels fine ones, then m_nGIParents parents
+        std::uint16_t*                  m_pGIVertSurfel;        // per vertex (the GPU buffer's order) its 4 nearest fine surfels, 0xFFFF: none
+        std::uint32_t                   m_nGISurfels;
+        std::uint32_t                   m_nGIParents;
+        gi_mode                         m_GIMode;
     };
 
     //-------------------------------------------------------------------------
@@ -142,7 +163,9 @@ namespace xgeom_static
         if (m_pSubMesh)                     delete[] m_pSubMesh;
         if (m_pCluster)                     delete[] m_pCluster;
         if (m_pDefaultMaterialInstances)    delete[] m_pDefaultMaterialInstances;
-        if (m_pData)                        delete[] m_pData;
+        if (m_pGISurfel)                    delete[] m_pGISurfel;
+        if (m_pGIVertSurfel)                delete[] m_pGIVertSurfel;
+        if (m_pData)                       delete[] m_pData;
 
         Initialize();
     }
@@ -247,6 +270,24 @@ namespace xserializer::io_functions
 
     //-------------------------------------------------------------------------
     template<> inline
+    xerr SerializeIO<xgeom_static::geom::gi_surfel>(xserializer::stream& Stream, const xgeom_static::geom::gi_surfel& S) noexcept
+    {
+        xerr Err;
+        false
+            || (Err = Stream.Serialize(S.m_Center.m_X))
+            || (Err = Stream.Serialize(S.m_Center.m_Y))
+            || (Err = Stream.Serialize(S.m_Center.m_Z))
+            || (Err = Stream.Serialize(S.m_Radius))
+            || (Err = Stream.Serialize(S.m_Normal.m_X))
+            || (Err = Stream.Serialize(S.m_Normal.m_Y))
+            || (Err = Stream.Serialize(S.m_Normal.m_Z))
+            || (Err = Stream.Serialize(S.m_iParent))
+            ;
+        return Err;
+    }
+
+    //-------------------------------------------------------------------------
+    template<> inline
     xerr SerializeIO<xgeom_static::geom>(xserializer::stream& Stream, const xgeom_static::geom& Geom) noexcept
     {
         xerr Err;
@@ -276,6 +317,11 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_ClusterDataOffset))
             || (Err = Stream.Serialize(Geom.m_nVertices))
             || (Err = Stream.Serialize(Geom.m_nIndices))
+            || (Err = Stream.Serialize(Geom.m_nGISurfels))
+            || (Err = Stream.Serialize(Geom.m_nGIParents))
+            || (Err = Stream.Serialize(Geom.m_pGISurfel,                    Geom.m_pGISurfel ? Geom.m_nGISurfels + Geom.m_nGIParents : 0u))
+            || (Err = Stream.Serialize(Geom.m_pGIVertSurfel,                Geom.getGIVertexSurfels().size()))
+            || (Err = Stream.Serialize(Geom.m_GIMode))
             ;
         return Err;
     }

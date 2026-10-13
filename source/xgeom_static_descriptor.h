@@ -4,6 +4,7 @@
 
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "xgeom_static_details.h"
+#include "xgeom_static.h"                  // gi_mode
 
 namespace xgeom_static
 {
@@ -11,6 +12,34 @@ namespace xgeom_static
     // So while generating the type guid we must treat it as an instance.
     inline static constexpr auto    resource_type_guid_v = xresource::type_guid(xresource::guid_generator::Instance64FromString("GeomStatic"));
     static constexpr wchar_t        mesh_filter_v[] = L"Mesh\0 *.fbx; *.obj\0Any Thing\0 *.*\0";
+
+    static constexpr auto gi_mode_v = std::array
+    { xproperty::settings::enum_item("OFF",                 gi_mode::OFF,                "No GI: no surfels are baked, the mesh is lit by the probes and the sky only.")
+    , xproperty::settings::enum_item("RECEIVE",             gi_mode::RECEIVE,            "The mesh's surfels are lit, but the rays of the GI do not see it: it neither occludes nor colors its neighbors (small props).")
+    , xproperty::settings::enum_item("RECEIVE_AND_BOUNCE",  gi_mode::RECEIVE_AND_BOUNCE, "The mesh is lit and bounces its light: the rays of every mesh see it (walls, floors, big objects).")
+    };
+
+    // How the GI reaches the pixels between the vertices: the surfels' light is read at the vertices and interpolated, so a mesh with
+    // vertices far apart gets them added where they are sparser than the surfels
+    enum class gi_density : std::uint8_t { AS_AUTHORED, SPLIT_TRIANGLES };
+    static constexpr auto gi_density_v = std::array
+    { xproperty::settings::enum_item("SPLIT_TRIANGLES", gi_density::SPLIT_TRIANGLES, "Triangles with an edge longer than the surfel size are split (their neighbors too: no cracks) until every surfel has vertices to paint.")
+    , xproperty::settings::enum_item("AS_AUTHORED",     gi_density::AS_AUTHORED,     "The vertices as authored: a big triangle reads the GI at its corners only.")
+    };
+
+    struct gi_settings
+    {
+        gi_mode             m_Mode          = gi_mode::RECEIVE_AND_BOUNCE;
+        gi_density          m_Density       = gi_density::SPLIT_TRIANGLES;
+        float               m_SurfelSize    = 0.5f;         // the radius of a surfel, mesh units (its parents are 3x)
+        XPROPERTY_DEF
+        ( "gi_settings", gi_settings
+        , obj_member<"Mode",        &gi_settings::m_Mode, member_enum_span<gi_mode_v>, member_help<"The GI this mesh takes part in">>
+        , obj_member<"Density",     &gi_settings::m_Density, member_enum_span<gi_density_v>, member_help<"Where the GI is read: at the vertices as authored, or at vertices added where they are sparser than the surfels">>
+        , obj_member<"SurfelSize",  &gi_settings::m_SurfelSize, member_ui<float>::drag_bar<0.01f, 0.05f, 10.0f>, member_help<"The radius of a GI surfel (mesh units, after the PreTranslation): smaller is finer light and more surfels to update">>
+        )
+    };
+    XPROPERTY_REG(gi_settings)
 
     struct lod
     {
@@ -514,6 +543,7 @@ namespace xgeom_static
         std::vector<ungroup_mesh>                   m_UngroupMeshList       = {};
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
+        gi_settings                                 m_GI                    = {};
 
         XPROPERTY_VDEF
         ( "GeomStatic", descriptor
@@ -544,7 +574,8 @@ namespace xgeom_static
             }>
             , member_help<"Meshes that are not in any group; these will be imported individually with their original hierarchy preserved"
             >>
-            , obj_member<"Deleted List",        &descriptor::m_DeleteEntryList,                                     member_help<"List of nodes and meshes marked for deletion; these will not be included in the compiled geometry">>
+            , obj_member<"GI",                  &descriptor::m_GI, member_ui_open<true>, member_help<"The surfel GI of this geometry: baked here, read by xLIONRender's renderer">>
+            , obj_member<"Deleted List",       &descriptor::m_DeleteEntryList,                                     member_help<"List of nodes and meshes marked for deletion; these will not be included in the compiled geometry">>
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>, member_help<"List of materials used by this geometry with usage counts (hidden by default)">>
             , obj_member<"MaterialInstance",    &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<>, member_help<"References to material instances assigned to this geometry">>
         )

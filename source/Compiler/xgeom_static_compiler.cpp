@@ -13,6 +13,8 @@
 #include "../xgeom_static.h"
 #include "../xgeom_static_details.h"
 
+#include "dependencies/xLIONRender/src/features/gi/xlionrender_surfel_gi.h"
+
 #include "dependencies/xproperty/source/xcore/my_properties.cpp"
 #include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
 
@@ -985,6 +987,120 @@ void ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
+        //--------------------------------------------------------------------------------------
+        // GI: the triangles with an edge longer than MaxEdge are split, a pass at a time until none is left. A long edge is split at its
+        // midpoint by both of its triangles (the midpoint is shared by the edge's two vertices: no cracks, and an edge duplicated at a seam
+        // gets the same midpoint position), a triangle with 1, 2 or 3 long edges becomes 2, 3 or 4, in its winding.
+        // Returns the triangles added.
+        std::size_t SplitTrianglesForGI(float MaxEdge, std::size_t MaxFacets)
+        {
+            auto&       V       = m_RawGeom.m_Vertex;
+            const auto  nBefore = m_RawGeom.m_Facet.size();
+            const float Max2    = MaxEdge * MaxEdge;
+            const auto  Lerp    = [](const xraw3d::geom::vertex& A, const xraw3d::geom::vertex& B)
+            {
+                auto M = A;                                         // weights, frame, colors: the first's (a static mesh, no colors)
+                M.m_Position = (A.m_Position + B.m_Position) * 0.5f;
+                for (int i = 0; i < A.m_nUVs; ++i) M.m_UV[i] = (A.m_UV[i] + B.m_UV[i]) * 0.5f;
+                for (int i = 0; i < A.m_nNormals; ++i)
+                {
+                    const auto N = A.m_BTN[i].m_Normal + B.m_BTN[i].m_Normal;
+                    M.m_BTN[i].m_Normal = N.LengthSq() > 1e-12f ? N.NormalizeCopy() : A.m_BTN[i].m_Normal;
+                }
+                return M;                                           // tangents: recomputed (Mikk) after the split
+            };
+
+            for (int Pass = 0; Pass < 16; ++Pass)
+            {
+                std::unordered_map<std::uint64_t, int> Mid;           // edge (low, high vertex) -> its midpoint
+                const auto MidOf = [&](int a, int b)
+                {
+                    if ((V[a].m_Position - V[b].m_Position).LengthSq() <= Max2) return -1;
+                    const auto [It, bNew] = Mid.try_emplace((std::uint64_t(std::min(a, b)) << 32) | std::uint32_t(std::max(a, b)), int(V.size()));
+                    if (bNew) V.push_back(Lerp(V[std::min(a, b)], V[std::max(a, b)]));
+                    return It->second;
+                };
+
+                std::vector<xraw3d::geom::facet> Out;
+                Out.reserve(m_RawGeom.m_Facet.size() * 2);
+                const auto Emit = [&](const xraw3d::geom::facet& F, int a, int b, int c) { auto& T = Out.emplace_back(F); T.m_iVertex[0] = a; T.m_iVertex[1] = b; T.m_iVertex[2] = c; };
+                const auto Dist2 = [&](int a, int b) { return (V[a].m_Position - V[b].m_Position).LengthSq(); };
+                for (const auto& F : m_RawGeom.m_Facet)
+                {
+                    if (F.m_nVertices != 3) { Out.push_back(F); continue; }
+                    const int v[3] = { F.m_iVertex[0], F.m_iVertex[1], F.m_iVertex[2] };
+                    const int m[3] = { MidOf(v[0], v[1]), MidOf(v[1], v[2]), MidOf(v[2], v[0]) };     // edge k: v[k] -> v[k+1]
+                    const int n    = (m[0] >= 0) + (m[1] >= 0) + (m[2] >= 0);
+                    if (n == 0) { Out.push_back(F); continue; }
+                    if (n == 3)
+                    {
+                        Emit(F, v[0], m[0], m[2]); Emit(F, m[0], v[1], m[1]); Emit(F, m[2], m[1], v[2]); Emit(F, m[0], m[1], m[2]);
+                        continue;
+                    }
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const int a = v[k], b = v[(k + 1) % 3], c = v[(k + 2) % 3];
+                        if (n == 1 && m[k] >= 0) { Emit(F, a, m[k], c); Emit(F, m[k], b, c); break; }
+                        if (n == 2 && m[k] >= 0 && m[(k + 1) % 3] >= 0)
+                        {
+                            const int ab = m[k], bc = m[(k + 1) % 3];
+                            Emit(F, ab, b, bc);
+                            if (Dist2(ab, c) < Dist2(a, bc)) { Emit(F, a, ab, c); Emit(F, ab, bc, c); }      // the quad a ab bc c on its shorter diagonal
+                            else                             { Emit(F, a, ab, bc); Emit(F, a, bc, c); }
+                            break;
+                        }
+                    }
+                }
+                const bool bDone = Out.size() == m_RawGeom.m_Facet.size();
+                if (Out.size() > MaxFacets)
+                {
+                    LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI: the triangle split stopped at {} triangles (the limit): a smaller mesh or a bigger SurfelSize reads the GI at more vertices", m_RawGeom.m_Facet.size()));
+                    V.resize(V.size() - Mid.size());
+                    break;
+                }
+                m_RawGeom.m_Facet = std::move(Out);
+                if (bDone) break;
+            }
+            return m_RawGeom.m_Facet.size() - nBefore;
+        }
+
+        //--------------------------------------------------------------------------------------
+        // GI: the surfels of the final geometry (its quantized vertices, in the GPU buffer's order: what the renderer reads), baked with the
+        // renderer's own bake, saved in the geometry
+        void BakeGI()
+        {
+            namespace gi = xlionrender::gi;
+            m_FinalGeom.m_GIMode = m_Descriptor.m_GI.m_Mode;
+            if (m_Descriptor.m_GI.m_Mode == xgeom_static::gi_mode::OFF) return;
+
+            gi::surfel_mesh M;
+            gi::FromXGeomStatic(M, m_FinalGeom);
+            const float R = std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f);
+            M.Bake(R, 3 * R);
+            if (M.m_Levels[0].size() >= 0xFFFF)
+            {
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI: {} surfels, more than a mesh can have (65534): no GI for this geometry, a bigger SurfelSize has fewer", M.m_Levels[0].size()));
+                return;
+            }
+
+            const auto ToSurfel = [](const gi::surfel& S, int iParent)
+            {
+                return geom::gi_surfel{ { S.m_Center.m_X, S.m_Center.m_Y, S.m_Center.m_Z }, S.m_Radius, { S.m_Normal.m_X, S.m_Normal.m_Y, S.m_Normal.m_Z }, std::uint32_t(iParent) };
+            };
+            m_FinalGeom.m_nGISurfels = std::uint32_t(M.m_Levels[0].size());
+            m_FinalGeom.m_nGIParents = std::uint32_t(M.m_Levels[1].size());
+            m_FinalGeom.m_pGISurfel  = new geom::gi_surfel[m_FinalGeom.m_nGISurfels + m_FinalGeom.m_nGIParents];
+            for (std::size_t i = 0; i < M.m_Levels[0].size(); ++i) m_FinalGeom.m_pGISurfel[i] = ToSurfel(M.m_Levels[0][i], M.m_ParentOf[i]);
+            for (std::size_t i = 0; i < M.m_Levels[1].size(); ++i) m_FinalGeom.m_pGISurfel[m_FinalGeom.m_nGISurfels + i] = ToSurfel(M.m_Levels[1][i], 0);
+            m_FinalGeom.m_pGIVertSurfel = new std::uint16_t[4 * std::size_t(m_FinalGeom.m_nVertices)];
+            for (std::size_t v = 0; v < m_FinalGeom.m_nVertices; ++v)
+                for (int k = 0; k < 4; ++k) m_FinalGeom.m_pGIVertSurfel[4 * v + k] = M.m_VertSurfels[v][k] < 0 ? std::uint16_t(0xFFFF) : std::uint16_t(M.m_VertSurfels[v][k]);
+
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} surfels, {} parents, {} vertices", m_FinalGeom.m_nGISurfels, m_FinalGeom.m_nGIParents, m_FinalGeom.m_nVertices));
+        }
+
+        //--------------------------------------------------------------------------------------
+
         xerr Compile()
         {
             try
@@ -1052,6 +1168,18 @@ void ConvertToCompilerMesh(void)
                 }
 
                 //
+                // GI: vertices where they are sparser than the surfels (before the tangents: they are computed for the new ones too)
+                //
+                if (m_Descriptor.m_GI.m_Mode != xgeom_static::gi_mode::OFF && m_Descriptor.m_GI.m_Density == xgeom_static::gi_density::SPLIT_TRIANGLES)
+                {
+                    displayProgressBar("Splitting triangles for the GI", 0);
+                    const auto nFacets = m_RawGeom.m_Facet.size();
+                    const auto nAdded  = SplitTrianglesForGI(std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f), std::max<std::size_t>(nFacets * 16, 1u << 20));
+                    LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} triangles split into {}", nFacets, nFacets + nAdded));
+                    displayProgressBar("Splitting triangles for the GI", 1);
+                }
+
+                //
                 // Clean the mesh
                 //
                 {
@@ -1079,6 +1207,10 @@ void ConvertToCompilerMesh(void)
 
                 // mm accuracy
                 ConvertToGeom(0.001f);
+
+                displayProgressBar("Baking the GI surfels", 0);
+                BakeGI();
+                displayProgressBar("Baking the GI surfels", 1);
                 
                 displayProgressBar("Generating Final Mesh", 1);
             }
