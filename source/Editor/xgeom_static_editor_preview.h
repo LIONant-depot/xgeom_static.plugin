@@ -468,7 +468,8 @@ namespace xgeom_static_editor::preview
                 Scene.m_GI = { .m_bEnable = true, .m_RayBudget = 1 << 16
                              , .m_Debug = S.m_GIView == render_settings::gi_view::SURFELS       ? dbg::SURFELS
                                         : S.m_GIView == render_settings::gi_view::LIGHT         ? dbg::LIGHT
-                                        : S.m_GIView == render_settings::gi_view::SURFACE_COLOR ? dbg::SURFACE_COLOR : dbg::NONE };
+                                        : S.m_GIView == render_settings::gi_view::SURFACE_COLOR ? dbg::SURFACE_COLOR
+                                        : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
             Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };

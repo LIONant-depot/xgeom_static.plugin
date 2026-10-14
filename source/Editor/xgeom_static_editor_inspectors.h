@@ -123,13 +123,14 @@ namespace xgeom_static_editor
         bool                m_bTangents;
         bool                m_bBinormals;
         bool                m_bNormals;
-        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR };
+        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR, COVERAGE };
         static constexpr auto gi_view_v = std::array
         { xproperty::settings::enum_item("OFF",     gi_view::OFF,     "No GI: the key light and the flat fill only")
         , xproperty::settings::enum_item("GI",      gi_view::GI,      "Lit with the GI of the geometry's own surfels (the sky and the key light bounce)")
         , xproperty::settings::enum_item("SURFELS", gi_view::SURFELS, "Every pixel in the color of the surfel it reads most: the surfels' placement and reach (black: no surfel reaches it)")
         , xproperty::settings::enum_item("LIGHT",   gi_view::LIGHT,   "The GI light alone: no textures, no direct light")
         , xproperty::settings::enum_item("SURFACE_COLOR", gi_view::SURFACE_COLOR, "Every pixel in the surface color of the surfel it reads most (the material capture): the color the GI bounces")
+        , xproperty::settings::enum_item("COVERAGE", gi_view::COVERAGE, "Which GI read lights each pixel: green its own surfels (per pixel), blue the vertices' (per pixel unsupported there), magenta none (no GI there)")
         };
         gi_view             m_GIView;
         bool                m_LightFollowsCamera;
