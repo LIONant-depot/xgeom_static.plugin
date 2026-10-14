@@ -1108,6 +1108,14 @@ void ConvertToCompilerMesh(void)
                 const auto& S = M.m_SurfelMaterial[i];
                 m_FinalGeom.m_pGISurfelMaterial[i] = { S.m_U, S.m_V, S.m_UVRadius, S.m_iMaterial };
             }
+            // What the renderer would build at load (half a minute in a Debug editor for a big geometry): the read grid (built above) and
+            // the neighbors (Bake's), packed
+            {
+                const auto Derived = M.PackDerived();
+                m_FinalGeom.m_nGIDerived = std::uint32_t(Derived.size());
+                m_FinalGeom.m_pGIDerived = new std::uint32_t[Derived.size()];
+                std::copy(Derived.begin(), Derived.end(), m_FinalGeom.m_pGIDerived);
+            }
             m_FinalGeom.m_pGIVertSurfel = new std::uint16_t[4 * std::size_t(m_FinalGeom.m_nVertices)];
             for (std::size_t v = 0; v < m_FinalGeom.m_nVertices; ++v)
                 for (int k = 0; k < 4; ++k) m_FinalGeom.m_pGIVertSurfel[4 * v + k] = M.m_VertSurfels[v][k] < 0 ? std::uint16_t(0xFFFF) : std::uint16_t(M.m_VertSurfels[v][k]);

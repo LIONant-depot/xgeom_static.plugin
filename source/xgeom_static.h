@@ -14,7 +14,7 @@ namespace xgeom_static
 
     struct geom
     {
-        inline static constexpr auto xserializer_version_v = 3;    // 2: the GI surfels, 3: where each samples its material
+        inline static constexpr auto xserializer_version_v = 4;    // 2: the GI surfels, 3: where each samples its material, 4: the GI's load-time structures
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -122,6 +122,7 @@ namespace xgeom_static
         inline std::span<gi_surfel>                     getGIParents                (void)                              const   noexcept { return { m_pGISurfel + m_nGISurfels, m_nGIParents }; }
         inline std::span<gi_surfel_material>            getGISurfelMaterials        (void)                              const   noexcept { return { m_pGISurfelMaterial, m_pGISurfelMaterial ? m_nGISurfels : 0u }; }
         inline std::span<std::uint16_t>                 getGIVertexSurfels          (void)                              const   noexcept { return { m_pGIVertSurfel, m_pGIVertSurfel ? 4 * std::size_t(m_nVertices) : 0 }; }
+        inline std::span<const std::uint32_t>           getGIDerived                (void)                              const   noexcept { return { m_pGIDerived, m_pGIDerived ? m_nGIDerived : 0u }; }
 
         xmath::fbbox                    m_BBox;
         char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
@@ -146,6 +147,8 @@ namespace xgeom_static
         gi_surfel*                      m_pGISurfel;            // m_nGISurfels fine ones, then m_nGIParents parents
         std::uint16_t*                  m_pGIVertSurfel;        // per vertex (the GPU buffer's order) its 4 nearest fine surfels, 0xFFFF: none
         gi_surfel_material*             m_pGISurfelMaterial;    // per fine surfel
+        std::uint32_t*                  m_pGIDerived;           // the GI's load-time structures (xlionrender::gi::surfel_mesh::PackDerived: the read grid, the neighbors), m_nGIDerived words
+        std::uint32_t                   m_nGIDerived;
         std::uint32_t                   m_nGISurfels;
         std::uint32_t                   m_nGIParents;
         gi_mode                         m_GIMode;
@@ -176,6 +179,7 @@ namespace xgeom_static
         if (m_pGISurfel)                    delete[] m_pGISurfel;
         if (m_pGIVertSurfel)                delete[] m_pGIVertSurfel;
         if (m_pGISurfelMaterial)            delete[] m_pGISurfelMaterial;
+        if (m_pGIDerived)                   delete[] m_pGIDerived;
         if (m_pData)                       delete[] m_pData;
 
         Initialize();
@@ -348,6 +352,8 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_pGIVertSurfel,                Geom.getGIVertexSurfels().size()))
             || (Err = Stream.Serialize(Geom.m_pGISurfelMaterial,            Geom.getGISurfelMaterials().size()))
             || (Err = Stream.Serialize(Geom.m_GIMode))
+            || (Err = Stream.Serialize(Geom.m_nGIDerived))
+            || (Err = Stream.Serialize(Geom.m_pGIDerived,                   Geom.getGIDerived().size()))
             ;
         return Err;
     }
