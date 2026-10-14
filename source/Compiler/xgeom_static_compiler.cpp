@@ -1082,7 +1082,7 @@ void ConvertToCompilerMesh(void)
                 M.BuildReadGrid();
                 const auto Cov = M.Coverage(4);
                 LogMessage(Cov.m_nUncovered ? xresource_pipeline::msg_type::WARNING : xresource_pipeline::msg_type::INFO
-                          , std::format("GI coverage: {} of {} surface points read no surfel ({:.2f}%)", Cov.m_nUncovered, Cov.m_nPoints, 100.0 * Cov.m_nUncovered / std::max(Cov.m_nPoints, 1)));
+                          , std::format("GI coverage: {} of {} surface points in sight read no surfel ({:.2f}%; {} covered points not counted)", Cov.m_nUncovered, Cov.m_nPoints, 100.0 * Cov.m_nUncovered / std::max(Cov.m_nPoints, 1), Cov.m_nHidden));
                 for (const auto& E : Cov.m_Examples)
                     LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI hole at {:.2f},{:.2f},{:.2f} normal {:.2f},{:.2f},{:.2f}: {} listed, nearest compatible surfel {:.2f}, nearest any {:.2f}"
                               , E.m_P.m_X, E.m_P.m_Y, E.m_P.m_Z, E.m_N.m_X, E.m_N.m_Y, E.m_N.m_Z, E.m_nList, E.m_NearestCompatible, E.m_NearestAny));
