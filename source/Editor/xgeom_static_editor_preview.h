@@ -230,6 +230,14 @@ namespace xgeom_static_editor::preview
         // The renderer's mesh and materials for the geometry (called after every (re)load of the compiled resource). The mesh
         // references the geometry's own GPU buffers; each material slot gets the material's HDR shader with the shadow map in
         // slot 0 and the material instance's textures after it, or the renderer's default material when anything does not resolve.
+        // Something the renderer's materials were made from compiled again (xresource::mgr::MarkUpdated: a material instance, its
+        // material - a shader it includes changed - or one of its textures): Render makes them again (getResource moves the references)
+        bool MaterialsStale() const noexcept
+        {
+            for (const auto& R : m_MatRefs) if (xmaterial_instance::rt::isStale(R)) return true;
+            return false;
+        }
+
         void RebuildMaterials(geom& Geom) noexcept
         {
             ReleaseMaterials();
@@ -418,6 +426,7 @@ namespace xgeom_static_editor::preview
         void Render(xgpu::window& Window, geom& Geom, float ViewW, float ViewH) noexcept
         {
             if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f || !m_Mesh.isValid()) return;
+            if (MaterialsStale()) RebuildMaterials(Geom);       // a material compiled again
             auto& S = m_Settings;
 
             const int W = static_cast<int>(ViewW), H = static_cast<int>(ViewH);
