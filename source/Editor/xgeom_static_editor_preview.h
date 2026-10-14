@@ -111,6 +111,10 @@ namespace xgeom_static_editor::preview
         // The material instances the geometry references, held while m_Materials uses their shaders and textures
         std::vector<xrsc::material_instance_ref>    m_MatRefs;
 
+        // The environment cubemap (render_settings::m_Environment), held while the renderer lights with it
+        xrsc::texture_ref                           m_EnvRef{};
+        std::uint64_t                               m_EnvInstance = 0;
+
         static bool Ok(xgpu::device::error* pErr) noexcept
         {
             if (!pErr) return true;
@@ -206,7 +210,13 @@ namespace xgeom_static_editor::preview
 
                 auto Shaders = std::array<const xgpu::shader*, 3>{ &Frag, &Geom, &Vert };
                 auto Binds   = std::array{ MeshBind, ClusterBind };
-                if (!Ok(Device.Create(m_WirePipeline, xgpu::pipeline::setup{ .m_VertexDescriptor = m_ShadowVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(push_const), .m_UniformBinds = Binds, .m_Blend = xgpu::pipeline::blend::getAlphaOriginal() }))) return false;
+                // The overlay pass depth-tests against the renderer's scene: the wire lies on that surface, so it is pulled toward the camera
+                xgpu::pipeline::setup Setup{ .m_VertexDescriptor = m_ShadowVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(push_const), .m_UniformBinds = Binds, .m_Blend = xgpu::pipeline::blend::getAlphaOriginal() };
+                Setup.m_DepthStencil.m_DepthBiasConstantFactor = -4.0f;
+                Setup.m_DepthStencil.m_DepthBiasSlopeFactor    = -2.0f;
+                Setup.m_DepthStencil.m_bDepthBiasEnable        = true;
+                Setup.m_DepthStencil.m_bDepthWriteEnable       = false;
+                if (!Ok(Device.Create(m_WirePipeline, Setup))) return false;
                 if (!Ok(Device.Create(m_WireInstance, { .m_PipeLine = m_WirePipeline }))) return false;
             }
 
@@ -264,7 +274,7 @@ namespace xgeom_static_editor::preview
                 }
                 if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
-                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures))) UseDefaultMaterial();
+                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, pMat->m_Flags.m_bAlpha))) UseDefaultMaterial();
             }
         }
 
@@ -279,6 +289,7 @@ namespace xgeom_static_editor::preview
         ~runtime() noexcept
         {
             ReleaseMaterials();
+            xresource::g_Mgr.ReleaseRef(m_EnvRef);
             if (m_bReady) m_Renderer.DestroyView(m_RenderView);
             xeditor::DestroyGpu( m_pDevice, m_NormalInstance, m_ShadowInstance, m_WireInstance
                                , m_NormalPipeline, m_ShadowPipeline, m_WirePipeline
@@ -446,10 +457,22 @@ namespace xgeom_static_editor::preview
                 }
                 using dbg = xlionrender::gi_debug;
                 Scene.m_GI = { .m_bEnable = true, .m_RayBudget = 1 << 16
-                             , .m_Debug = S.m_GIView == render_settings::gi_view::SURFELS ? dbg::SURFELS : S.m_GIView == render_settings::gi_view::LIGHT ? dbg::LIGHT : dbg::NONE };
+                             , .m_Debug = S.m_GIView == render_settings::gi_view::SURFELS       ? dbg::SURFELS
+                                        : S.m_GIView == render_settings::gi_view::LIGHT         ? dbg::LIGHT
+                                        : S.m_GIView == render_settings::gi_view::SURFACE_COLOR ? dbg::SURFACE_COLOR : dbg::NONE };
             }
             Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
+
+            // The environment cubemap lights instead of the flat fill (a texture that is not a cubemap: the flat fill)
+            if (S.m_Environment.m_Instance.m_Value != m_EnvInstance)
+            {
+                xresource::g_Mgr.ReleaseRef(m_EnvRef);
+                m_EnvRef      = S.m_Environment;
+                m_EnvInstance = S.m_Environment.m_Instance.m_Value;
+            }
+            if (const xgpu::texture* pEnv = m_EnvRef.empty() ? nullptr : xresource::g_Mgr.getResource(m_EnvRef); pEnv && pEnv->isCubemap())
+                Scene.m_Sky = { .m_Intensity = 1, .m_pCubemap = pEnv };
 
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
         }
@@ -472,6 +495,8 @@ namespace xgeom_static_editor::preview
                 MeshUBO.m_w2C = w2C;
                 MeshUBO.m_L2w = L2w;
                 CmdBuffer.setDynamicUBO(m_WireUBO, 0);
+                CmdBuffer.setBuffer(Geom.IndexBuffer());           // (the overlay pass starts with the renderer's buffers bound)
+                CmdBuffer.setBuffer(Geom.VertexBuffer());
                 DrawClusters(CmdBuffer, Geom);
             }
 

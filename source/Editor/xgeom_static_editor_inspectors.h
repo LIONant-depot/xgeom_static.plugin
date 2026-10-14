@@ -9,6 +9,7 @@
 #include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
 #include "dependencies/xresource_mgr/source/xresource_mgr.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
+#include "plugins/xtexture.plugin/source/xtexture_xgpu_rsc_loader.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_xgpu_rsc_loader.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_xgpu_runtime.h"
 
@@ -99,6 +100,7 @@ namespace xgeom_static_editor
 
             m_bWireFrame = m_bTangents = m_bBinormals = m_bNormals = m_LightFollowsCamera = false;
             m_GIView      = gi_view::OFF;
+            m_Environment = {};
             m_bGridToYMin = true;
             m_GridYMin    = {};
         }
@@ -121,15 +123,17 @@ namespace xgeom_static_editor
         bool                m_bTangents;
         bool                m_bBinormals;
         bool                m_bNormals;
-        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT };
+        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR };
         static constexpr auto gi_view_v = std::array
         { xproperty::settings::enum_item("OFF",     gi_view::OFF,     "No GI: the key light and the flat fill only")
         , xproperty::settings::enum_item("GI",      gi_view::GI,      "Lit with the GI of the geometry's own surfels (the sky and the key light bounce)")
         , xproperty::settings::enum_item("SURFELS", gi_view::SURFELS, "Every pixel in the color of the surfel it reads most: the surfels' placement and reach (black: no surfel reaches it)")
         , xproperty::settings::enum_item("LIGHT",   gi_view::LIGHT,   "The GI light alone: no textures, no direct light")
+        , xproperty::settings::enum_item("SURFACE_COLOR", gi_view::SURFACE_COLOR, "Every pixel in the surface color of the surfel it reads most (the material capture): the color the GI bounces")
         };
         gi_view             m_GIView;
         bool                m_LightFollowsCamera;
+        xrsc::texture_ref   m_Environment;      // a cubemap: lights the geometry instead of the flat fill (empty: the flat fill)
         bool                m_bGridToYMin;
         float               m_GridYMin;
 
@@ -145,6 +149,8 @@ namespace xgeom_static_editor
             , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Has a key of its own (see Project Settings > Keymap: GeomStatic/Preview/LightFollowsCamera).\n"
                                                                                                     "When enabled, the light moves with the camera for consistent shadow direction.\n"
                                                                                                     "Disabled: the light stays where it is.">>
+            , obj_member<"Environment",         &render_settings::m_Environment, member_help<"A cubemap texture (HDR or not) that lights the geometry: the diffuse and the reflections by roughness, and the GI's sky.\n"
+                                                                                          "Empty: the flat fill. A texture that is not a cubemap is ignored.">>
             >
         , obj_scope< "Debug Geometry"
             , obj_member<"WireFrame",    &render_settings::m_bWireFrame, member_help<"Render geometry in wireframe mode instead of shaded">>
