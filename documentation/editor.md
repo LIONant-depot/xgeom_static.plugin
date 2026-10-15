@@ -38,6 +38,7 @@ Run as `<resource name>\<Command>` (see `list`) or `ResourceEditorCommand -Asset
 | `ListPreview [-Filter]`, `SetPreview -Path -Value` | the preview settings (the ones on the Rendering Options panel), by the paths `ListPreview` prints; an enum takes its item name |
 | `SetImportMaterials -On true\|false` | imports the materials and textures of the model or stops (undoable): the slots nobody assigned take the imported instances, or give them back |
 | `DuplicateImportedMaterial -Slot i -Instance hex` | copies a slot's imported Material Instance into a resource of the project (next to the geometry) and makes it the slot's override (undoable) |
+| `RemoveUnusedImportedResources` | removes the imported resources this one no longer makes (a material left the model, an import is off): Material Instances, Textures, Skeleton, Animations, with the edits they hold (undoable: the files and the library entries come back). The Description panel shows the button (with a confirmation) while there are some; the asset browser draws them dimmed. |
 | `Statistics` | meshes, vertices, submeshes and so on of the compiled geometry |
 
 Each node command snapshots the descriptor first, so undo restores everything it touched (groups, ungrouped meshes, the deleted list and the

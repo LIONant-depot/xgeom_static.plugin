@@ -218,7 +218,7 @@ namespace xgeom_static_editor
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
             AddPanel("Preview",            dock::center, [this] { RenderPreview(); });
             AddPanel("Scene Hierarchy",    dock::left_bottom, [this] { RenderHierarchy(); });
-            AddPanel("Description",        dock::right,  [this] { m_DescriptorInspector.Show(); });
+            AddPanel("Description",        dock::right,  [this] { m_Import.DrawUnusedButton(); m_DescriptorInspector.Show(); });
 
             if (pDevice && m_Preview.Init(*pDevice)) ReloadResource();
         }

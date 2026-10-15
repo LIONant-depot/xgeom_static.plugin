@@ -1428,7 +1428,8 @@ void ConvertToCompilerMesh(void)
                 displayProgressBar("Importing Materials", 0);
                 xmaterial_instance::import::emitter Emitter
                 { .m_ProjectPath        = m_ProjectPaths.m_Project
-                , .m_CachedDescriptors  = m_ProjectPaths.m_CachedDescriptors
+                , .m_Descriptors        = m_ProjectPaths.m_Descriptors
+                , .m_OwnerFolder        = std::format(L"{}/{}.desc", m_ProjectPaths.m_Descriptors, m_ResourcePartialPath)
                 , .m_Owner              = { m_ResourceGuid, xgeom_static::resource_type_guid_v }
                 , .m_ModelPath          = m_Descriptor.m_ImportAsset
                 , .m_Settings           = m_Descriptor.m_ImportMaterials
