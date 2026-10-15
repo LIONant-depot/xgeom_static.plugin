@@ -46,7 +46,9 @@ material reference counts). A node is named by its path from the scene root, e.g
 ## The preview
 
 Right drag turns the camera, middle drag pans, the wheel zooms, Space lets the light follow the camera. The left panel holds the view
-settings (wire frame, tangents, binormals, normals, grid) and the statistics of the compiled geometry.
+settings (wire frame, tangents, binormals, normals, grid) and the statistics of the compiled geometry. Under it the Scene Hierarchy panel
+shows the nodes of the model (right click a node: merge groups, delete); the Description panel on the right holds the descriptor. Every panel
+docks anywhere.
 
 ## Imported materials
 

@@ -31,10 +31,10 @@ namespace xgeom_static
     struct gi_settings
     {
         gi_mode             m_Mode          = gi_mode::RECEIVE_AND_BOUNCE;
-        gi_density          m_Density       = gi_density::SPLIT_TRIANGLES;
+        gi_density          m_Density       = gi_density::AS_AUTHORED;
         float               m_SurfelSize    = 0.5f;         // the radius of a surfel, mesh units (its parents are 3x)
-        bool                m_bLeakProtection = true;       // walls cut the reads (xlionrender::gi::surfel_mesh::m_bLeakProtection)
-        bool                m_bPatchDefects   = true;       // a surfel for each piece of surface no surfel serves (the compile log lists them)
+        bool                m_bLeakProtection = false;      // walls cut the reads (xlionrender::gi::surfel_mesh::m_bLeakProtection)
+        bool                m_bPatchDefects   = false;      // a surfel for each piece of surface no surfel serves (the compile log lists them)
         XPROPERTY_DEF
         ( "gi_settings", gi_settings
         , obj_member<"Mode",        &gi_settings::m_Mode, member_enum_span<gi_mode_v>, member_help<"The GI this mesh takes part in">>

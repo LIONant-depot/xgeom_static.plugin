@@ -217,7 +217,8 @@ namespace xgeom_static_editor
 
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
             AddPanel("Preview",            dock::center, [this] { RenderPreview(); });
-            AddPanel("Description",        dock::right,  [this] { RenderHierarchy(); m_DescriptorInspector.Show(); });
+            AddPanel("Scene Hierarchy",    dock::left_bottom, [this] { RenderHierarchy(); });
+            AddPanel("Description",        dock::right,  [this] { m_DescriptorInspector.Show(); });
 
             if (pDevice && m_Preview.Init(*pDevice)) ReloadResource();
         }
@@ -300,18 +301,11 @@ namespace xgeom_static_editor
             ImGui::PopClipRect();
         }
 
-        // The scene nodes. Right click: merge groups and deleting. Every action is a command, run once the tree is drawn.
+        // The scene nodes, in their own panel. Right click: merge groups and deleting. Every action is a command, run once the tree is drawn.
         void RenderHierarchy() noexcept
         {
             auto& Root = m_Details.m_RootNode;
-            if (!m_Document.m_pDescriptor || (Root.m_Children.empty() && Root.m_MeshList.empty())) return;
-            xeditor::PushLevelEditorInspectorHeaderColors();
-            const bool bShow = ImGui::CollapsingHeader("Scene Hierarchy", ImGuiTreeNodeFlags_DefaultOpen);
-            xeditor::PopLevelEditorInspectorHeaderColors();
-            if (!bShow) return;
-
-            ImGui::Separator();
-            ImGui::Dummy(ImVec2(0, 12));
+            if (!m_Document.m_pDescriptor || (Root.m_Children.empty() && Root.m_MeshList.empty())) { ImGui::TextDisabled("No nodes yet (compile the geometry)."); return; }
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(8, 7));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(8, 2));
             ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.0f);
