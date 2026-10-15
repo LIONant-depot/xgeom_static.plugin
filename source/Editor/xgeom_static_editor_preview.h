@@ -100,6 +100,7 @@ namespace xgeom_static_editor::preview
         xlionrender::instance                   m_Renderer;
         xlionrender::render_view                m_RenderView;
         xlionrender::mesh_id                    m_Mesh;
+        const geom*                             m_pMeshGeom = nullptr;  // the geometry m_Mesh was made from (Render rebuilds for another one)
         bool                                    m_bGIReady = false;     // the mesh has its surfels (the first GI view after a load)
         std::vector<xlionrender::material_id>   m_Materials;    // one per material slot of the geometry
 
@@ -243,6 +244,7 @@ namespace xgeom_static_editor::preview
             ReleaseMaterials();
             m_Renderer.DestroyMesh(m_Mesh);
             (void)Ok(m_Renderer.CreateClusterGeom(m_Mesh, xlionrender::MakeClusterGeom(Geom)));
+            m_pMeshGeom = &Geom;
             m_bGIReady = false;
 
             const auto Materials = Geom.getDefaultMaterialInstances();
@@ -426,7 +428,9 @@ namespace xgeom_static_editor::preview
         void Render(xgpu::window& Window, geom& Geom, float ViewW, float ViewH) noexcept
         {
             if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f || !m_Mesh.isValid()) return;
-            if (MaterialsStale()) RebuildMaterials(Geom);       // a material compiled again
+            // The geometry compiled again (getResource moved the caller's reference and the old data is gone - the mesh was made from its
+            // buffers), or a material did
+            if (&Geom != m_pMeshGeom || MaterialsStale()) RebuildMaterials(Geom);
             auto& S = m_Settings;
 
             const int W = static_cast<int>(ViewW), H = static_cast<int>(ViewH);
