@@ -181,7 +181,8 @@ namespace xgeom_static_editor
         xeditor::set_preview_cmd<render_settings>  m_SetPreview;
         xeditor::list_preview_cmd<render_settings> m_ListPreview;
         xeditor::lambda_query_cmd                           m_Statistics;
-        xeditor::camera_cmds                                m_CameraCmds;
+        xeditor::lambda_query_cmd                           m_DumpGI;
+        xeditor::camera_cmds                               m_CameraCmds;
         xeditor::inspector_panel            m_SettingsInspector{ "Rendering Settings" };
         xrsc::geom_static                   m_GeomRef;
         bool                                m_bHasGeom = false;         // the compiled geometry is loaded and drawable
@@ -197,6 +198,13 @@ namespace xgeom_static_editor
             , m_Import(m_Undo, m_Document, &GetImportSlots)
             , m_SetPreview(m_Undo, m_Preview.m_Settings), m_ListPreview(m_Undo, m_Preview.m_Settings)
             , m_Statistics(m_Undo, "Statistics", "The statistics of the compiled geometry (meshes, vertices, sizes). Usage: Statistics", [this] { return xeditor::cmd_util::ListProperties({ xproperty::getObject(m_Info), &m_Info }, {}); })
+            , m_DumpGI(m_Undo, "DumpGI", "The preview's GI surfels to GIDump.csv in the compile log folder, as the Level's DumpGI (per surfel: the solver's light, the shown light, validity, the captured albedo and emission). A GI view must be on. Usage: DumpGI"
+                , [this]
+                {
+                    const auto Path = xstrtool::To(m_Document.m_LogPath + L"\\GIDump.csv");
+                    const int  n    = m_Preview.m_Renderer.DumpGI(Path.c_str());
+                    return n < 0 ? std::string("DumpGI: no GI (turn a GI view on)") : std::format("DumpGI: ok\nSurfels={}\nFile={}", n, Path);
+                })
             , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); } })
         {
             for (auto* pInspector : { &m_DescriptorInspector.m_Inspector, &m_SettingsInspector.m_Inspector })
