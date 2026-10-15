@@ -3,6 +3,7 @@
 #pragma once
 
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
+#include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
 #include "xgeom_static_details.h"
 #include "xgeom_static.h"                  // gi_mode
 
@@ -273,6 +274,7 @@ namespace xgeom_static
                 }
             }
 
+            m_ImportMaterials.Validate(Errors);
 
         }
 
@@ -536,7 +538,15 @@ namespace xgeom_static
         }
 
 
-        inline std::vector<std::string> MergeWithDetails(xgeom_static::details& Details);
+        inline std::vector<std::string> MergeWithDetails(xgeom_static::details& Details, xresource::instance_guid Owner);
+
+        // The material slots with the import on take the imported instances, see xmaterial_instance::import::SyncSlots
+        bool SyncMaterialSlots(xresource::instance_guid Owner) noexcept
+        {
+            std::vector<std::string> Names;
+            for (auto& M : m_MaterialDetailsList) Names.push_back(M.m_Name);
+            return xmaterial_instance::import::SyncSlots(m_ImportMaterials, Owner, Names, m_MaterialInstRefList);
+        }
 
         std::wstring                                m_ImportAsset           = {};
         pre_transform                               m_PreTranslation        = {};
@@ -548,6 +558,7 @@ namespace xgeom_static
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
         gi_settings                                 m_GI                    = {};
+        xmaterial_instance::import::settings        m_ImportMaterials       = {};
 
         XPROPERTY_VDEF
         ( "GeomStatic", descriptor
@@ -581,6 +592,7 @@ namespace xgeom_static
             , obj_member<"GI",                  &descriptor::m_GI, member_ui_open<true>, member_help<"The surfel GI of this geometry: baked here, read by xLIONRender's renderer">>
             , obj_member<"Deleted List",       &descriptor::m_DeleteEntryList,                                     member_help<"List of nodes and meshes marked for deletion; these will not be included in the compiled geometry">>
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>, member_help<"List of materials used by this geometry with usage counts (hidden by default)">>
+            , obj_member<"ImportMaterials",     &descriptor::m_ImportMaterials, member_ui_open<true>, member_help<"Import the materials and textures of the model (generated, virtual resources) instead of assigning every material instance by hand">>
             , obj_member<"MaterialInstance",    &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<>, member_help<"References to material instances assigned to this geometry">>
         )
     };
@@ -617,7 +629,7 @@ namespace xgeom_static
 
     //--------------------------------------------------------------------------------------
     inline
-        std::vector<std::string> descriptor::MergeWithDetails(xgeom_static::details& Details)
+        std::vector<std::string> descriptor::MergeWithDetails(xgeom_static::details& Details, xresource::instance_guid Owner)
     {
         std::vector<std::string> Messages;
 
@@ -814,6 +826,8 @@ namespace xgeom_static
         // Recompute material references
         RecomputeMaterialReferences(Details);
 
+        // The imported instances go in the slots nobody has assigned
+        SyncMaterialSlots(Owner);
 
         return Messages;
     }

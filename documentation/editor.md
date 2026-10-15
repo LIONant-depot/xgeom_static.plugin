@@ -36,6 +36,8 @@ Run as `<resource name>\<Command>` (see `list`) or `ResourceEditorCommand -Asset
 | `CompileStatus [-Lines n]` | how the last compile went: state, unsaved changes, validation errors, the end of the log |
 | `SetCamera [-Yaw -Pitch -Distance -Target x,y,z]`, `GetCamera`, `FrameSubject` | the preview camera (degrees), read back, or refitted to the subject (view state, not undoable) |
 | `ListPreview [-Filter]`, `SetPreview -Path -Value` | the preview settings (the ones on the Rendering Options panel), by the paths `ListPreview` prints; an enum takes its item name |
+| `SetImportMaterials -On true\|false` | imports the materials and textures of the model or stops (undoable): the slots nobody assigned take the imported instances, or give them back |
+| `DuplicateImportedMaterial -Slot i -Instance hex` | copies a slot's imported Material Instance into a resource of the project (next to the geometry) and makes it the slot's override (undoable) |
 | `Statistics` | meshes, vertices, submeshes and so on of the compiled geometry |
 
 Each node command snapshots the descriptor first, so undo restores everything it touched (groups, ungrouped meshes, the deleted list and the
@@ -45,3 +47,14 @@ material reference counts). A node is named by its path from the scene root, e.g
 
 Right drag turns the camera, middle drag pans, the wheel zooms, Space lets the light follow the camera. The left panel holds the view
 settings (wire frame, tangents, binormals, normals, grid) and the statistics of the compiled geometry.
+
+## Imported materials
+
+`ImportMaterials/bImport` on: every compile makes one virtual Material Instance per material of the model, from the PBR material of
+`ImportMaterials/Material` (`ImportMaterials/AlphaTest` when the material is cut out by an opacity map or by the alpha of its color map), with
+virtual Textures in its slots: the color map (or the diffuse color), the normal map (or a flat one) and the ORME packed from the PBR maps of
+the model (or constants: roughness from the shininess, emission from the emissive color). They show as children of the geometry in the
+resource browser and are made again by every compile, so they are not edited: a slot takes an instance of your own instead, and is then an
+override. An override has the arrow beside it (it gives the slot back the imported instance); the row's context menu has
+"Duplicate as override", which starts your own instance from the imported one. The code is in `xmaterial_instance.plugin`
+(`source/xmaterial_instance_import.h`, `source/Compiler/xmaterial_instance_import_compiler.h`, `source/Editor/xmaterial_instance_import_editor.h`).
