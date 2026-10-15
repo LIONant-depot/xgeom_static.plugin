@@ -110,7 +110,7 @@ namespace xgeom_static_editor::preview
         xeditor_tools::grid         m_Grid;
 
         // The material instances the geometry references, held while m_Materials uses their shaders and textures
-        std::vector<xrsc::material_instance_ref>    m_MatRefs;
+        std::vector<xmaterial_instance::held>       m_MatRefs;      // what m_Materials were made of, held (their GPU objects point at it)
 
         // The environment cubemap (render_settings::m_Environment), held while the renderer lights with it
         xrsc::texture_ref                           m_EnvRef{};
@@ -235,7 +235,7 @@ namespace xgeom_static_editor::preview
         // material - a shader it includes changed - or one of its textures): Render makes them again (getResource moves the references)
         bool MaterialsStale() const noexcept
         {
-            for (const auto& R : m_MatRefs) if (xmaterial_instance::rt::isStale(R)) return true;
+            for (const auto& H : m_MatRefs) if (H.isStale()) return true;
             return false;
         }
 
@@ -254,7 +254,6 @@ namespace xgeom_static_editor::preview
             for (auto& MI : Materials)
             {
                 const auto Index = static_cast<int>(&MI - Materials.data());
-                xresource::g_Mgr.CloneRef(m_MatRefs[Index], MI);
 
                 // An empty ref, or one that fails to resolve at any step below (the material instance, its material, one of its
                 // textures), draws with the fallback - the geometry should still render with something instead of vanishing.
@@ -266,9 +265,10 @@ namespace xgeom_static_editor::preview
 
                 if (MI.empty()) { UseDefaultMaterial(); continue; }
 
-                xmaterial_instance::rt* pMI = xresource::g_Mgr.getResource(m_MatRefs[Index]);
+                auto& Held = m_MatRefs[Index];
+                xmaterial_instance::rt* pMI = Held.Take(MI);
                 if (!pMI) { UseDefaultMaterial(); continue; }
-                auto* pMat = xresource::g_Mgr.getResource(pMI->m_MaterialRef);
+                auto* pMat = xresource::g_Mgr.getResource(Held.m_Material);
                 if (!pMat) { UseDefaultMaterial(); continue; }
 
                 // Slot 0 of every material is the shadow map; the others are the material instance's textures
@@ -278,7 +278,7 @@ namespace xgeom_static_editor::preview
                 for (auto& E : pMI->getTextures())
                 {
                     if (&E == pMI->getTextures().data()) { Textures.push_back(&m_Grid.m_ShadowMap); continue; }
-                    auto* pTexture = xresource::g_Mgr.getResource(E.m_TexureRef);
+                    auto* pTexture = xresource::g_Mgr.getResource(Held.m_Textures[&E - pMI->getTextures().data()]);
                     if (!pTexture) { bTextures = false; break; }
                     Textures.push_back(pTexture);
                 }
@@ -291,7 +291,7 @@ namespace xgeom_static_editor::preview
         void ReleaseMaterials() noexcept
         {
             for (auto& E : m_Materials) m_Renderer.DestroyMaterial(E);
-            for (auto& E : m_MatRefs) xresource::g_Mgr.ReleaseRef(E);
+            for (auto& E : m_MatRefs) E.Release();
             m_Materials.clear();
             m_MatRefs.clear();
         }
