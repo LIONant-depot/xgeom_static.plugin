@@ -32,11 +32,15 @@ namespace xgeom_static
         gi_mode             m_Mode          = gi_mode::RECEIVE_AND_BOUNCE;
         gi_density          m_Density       = gi_density::SPLIT_TRIANGLES;
         float               m_SurfelSize    = 0.5f;         // the radius of a surfel, mesh units (its parents are 3x)
+        bool                m_bLeakProtection = true;       // walls cut the reads (xlionrender::gi::surfel_mesh::m_bLeakProtection)
+        bool                m_bPatchDefects   = true;       // a surfel for each piece of surface no surfel serves (the compile log lists them)
         XPROPERTY_DEF
         ( "gi_settings", gi_settings
         , obj_member<"Mode",        &gi_settings::m_Mode, member_enum_span<gi_mode_v>, member_help<"The GI this mesh takes part in">>
         , obj_member<"Density",     &gi_settings::m_Density, member_enum_span<gi_density_v>, member_help<"Where the GI is read: at the vertices as authored, or at vertices added where they are sparser than the surfels">>
         , obj_member<"SurfelSize",  &gi_settings::m_SurfelSize, member_ui<float>::drag_bar<0.01f, 0.05f, 10.0f>, member_help<"The radius of a GI surfel (mesh units, after the PreTranslation): smaller is finer light and more surfels to update">>
+        , obj_member<"PatchDefects", &gi_settings::m_bPatchDefects, member_help<"Thin faces beside other geometry (a strip of ceiling between a beam and a wall, a frame's narrow face) that no surfel serves are defects of the model: the compile log lists them (fix the model there). On: each gets a surfel of its own (the COVERAGE view shows them yellow); off: they read no GI there (magenta)">>
+        , obj_member<"LeakProtection", &gi_settings::m_bLeakProtection, member_help<"Light does not leak through walls: where a wall crosses the GI's read grid the surface on each side reads only what it sees, and the GI's rays read through the same grid (not the hit triangle's corners: a floor under a wall had corners in both rooms). Costs compile time and some GI time; off for props that have no walls">>
         )
     };
     XPROPERTY_REG(gi_settings)

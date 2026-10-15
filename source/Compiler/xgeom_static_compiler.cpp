@@ -1076,13 +1076,34 @@ void ConvertToCompilerMesh(void)
             gi::surfel_mesh M;
             gi::FromXGeomStatic(M, m_FinalGeom);
             const float R = std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f);
+            M.m_bLeakProtection = m_Descriptor.m_GI.m_bLeakProtection;
             M.Bake(R, 3 * R);
             {
                 // The per-pixel read's coverage (what the renderer builds at load): reported, with the first holes
                 M.BuildReadGrid();
+                // Defects: seen pieces of surface no surfel serves (thin faces beside other geometry). Listed for the artist; patched with a
+                // surfel each when the descriptor says so (the bake again, the same darts plus those: the same surfels, theirs after them)
+                if (!M.m_EmptyParts.empty())
+                {
+                    std::string Where;
+                    for (std::size_t i = 0; i < M.m_EmptyParts.size() && i < 8; ++i)
+                    {
+                        const auto& [P, N] = M.m_EmptyParts[i];
+                        Where += std::format(" [{:.2f},{:.2f},{:.2f} facing {:.2f},{:.2f},{:.2f}]", P.m_X, P.m_Y, P.m_Z, N.m_X, N.m_Y, N.m_Z);
+                    }
+                    LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI defects: {} pieces of surface no surfel serves (thin faces beside other geometry: fix the model there; the COVERAGE view shows them magenta, or yellow when patched). First:{}", M.m_EmptyParts.size(), Where));
+                    if (m_Descriptor.m_GI.m_bPatchDefects)
+                    {
+                        const auto Forced = M.m_EmptyParts;
+                        M.Bake(R, 3 * R, Forced);
+                        M.BuildReadGrid();
+                        LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI defects patched (PatchDefects): {} surfels added; {} pieces still unserved"
+                                  , M.m_FirstPatch == 0xFFFFFFFFu ? 0 : M.m_Levels[0].size() - M.m_FirstPatch, M.m_EmptyParts.size()));
+                    }
+                }
                 const auto Cov = M.Coverage(4);
                 LogMessage(Cov.m_nUncovered ? xresource_pipeline::msg_type::WARNING : xresource_pipeline::msg_type::INFO
-                          , std::format("GI coverage: {} of {} surface points in sight read no surfel ({:.2f}%; {} covered points not counted)", Cov.m_nUncovered, Cov.m_nPoints, 100.0 * Cov.m_nUncovered / std::max(Cov.m_nPoints, 1), Cov.m_nHidden));
+                          , std::format("GI coverage: {} of {} surface points in sight read no surfel ({:.2f}%; {} covered points not counted); a read lists {:.1f} surfels on average, at most {}", Cov.m_nUncovered, Cov.m_nPoints, 100.0 * Cov.m_nUncovered / std::max(Cov.m_nPoints, 1), Cov.m_nHidden, Cov.m_ListSum / std::max(Cov.m_nPoints, 1), Cov.m_ListMax));
                 for (const auto& E : Cov.m_Examples)
                     LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI hole at {:.2f},{:.2f},{:.2f} normal {:.2f},{:.2f},{:.2f}: {} listed, nearest compatible surfel {:.2f}, nearest any {:.2f}"
                               , E.m_P.m_X, E.m_P.m_Y, E.m_P.m_Z, E.m_N.m_X, E.m_N.m_Y, E.m_N.m_Z, E.m_nList, E.m_NearestCompatible, E.m_NearestAny));
