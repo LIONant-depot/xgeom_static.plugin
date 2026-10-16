@@ -454,6 +454,8 @@ namespace xgeom_static_editor::preview
                                         : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
             Scene.m_GI.m_Saturation = S.m_GISaturation;
+            auto* pHost = xeditor::host::current();                                 // what the foreground leaves of the host's shared GI allowance
+            if (pHost) Scene.m_GI.m_TraceAllowanceMs = pHost->m_GIAllowance.Grant(false);
             Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
@@ -468,6 +470,7 @@ namespace xgeom_static_editor::preview
                 Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
+            if (pHost && Scene.m_GI.m_bEnable) pHost->m_GIAllowance.Used(float(m_Renderer.getGIStats().m_TraceMs), false);
         }
 
         // The wire frame, the grid and the tangent/binormal/normal lines, in display colors over the tone-mapped image
