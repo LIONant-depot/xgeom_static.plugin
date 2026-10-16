@@ -5,6 +5,7 @@
 // What the Static Geom editor shows next to the descriptor: the view settings (camera, light, debug geometry, grid) and the
 // read-only facts about the compiled geometry (sizes, counts, meshes, vertex streams, materials).
 #include "source/Tools/xgpu_view.h"
+#include "dependencies/xeditor_tools/src/xeditor_tools_camera.h"
 #include "dependencies/xproperty/source/xcore/my_properties.h"
 #include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
 #include "dependencies/xresource_mgr/source/xresource_mgr.h"
@@ -100,6 +101,7 @@ namespace xgeom_static_editor
 
             m_bWireFrame = m_bTangents = m_bBinormals = m_bNormals = m_LightFollowsCamera = false;
             m_GIView      = gi_view::OFF;
+            m_GISaturation = 1.0f;
             m_Environment = {};
             m_bGridToYMin = true;
             m_GridYMin    = {};
@@ -116,6 +118,7 @@ namespace xgeom_static_editor
         xmath::radian3      m_Angles;
         float               m_Distance;
         xmath::fvec3        m_CameraTarget;
+        xeditor_tools::camera_state m_Camera;                // Orbit or Fly, the fly speed (view state, not reflected)
         xgpu::tools::view   m_LightingView;
         xmath::fvec3        m_LightDirection;
         xmath::fvec3        m_LightPosition;
@@ -133,6 +136,7 @@ namespace xgeom_static_editor
         , xproperty::settings::enum_item("COVERAGE", gi_view::COVERAGE, "Which GI read lights each pixel: green its own surfels (per pixel), blue the vertices' (per pixel unsupported there), magenta none (no GI there)")
         };
         gi_view             m_GIView;
+        float               m_GISaturation;     // the GI light's saturation (1: as solved)
         bool                m_LightFollowsCamera;
         xrsc::texture_ref   m_Environment;      // a cubemap: lights the geometry instead of the flat fill (empty: the flat fill)
         bool                m_bGridToYMin;
@@ -150,6 +154,7 @@ namespace xgeom_static_editor
             , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Has a key of its own (see Project Settings > Keymap: GeomStatic/Preview/LightFollowsCamera).\n"
                                                                                                     "When enabled, the light moves with the camera for consistent shadow direction.\n"
                                                                                                     "Disabled: the light stays where it is.">>
+            , obj_member<"GISaturation",        &render_settings::m_GISaturation, member_help<"The saturation of the GI light shown (1: as solved; luminance kept). The surfels and the filter that smooths them average colors toward grey: more brings the bounced colors back. Preview only.">>
             , obj_member<"Environment",         &render_settings::m_Environment, member_help<"A cubemap texture (HDR or not) that lights the geometry: the diffuse and the reflections by roughness, and the GI's sky.\n"
                                                                                           "Empty: the flat fill. A texture that is not a cubemap is ignored.">>
             >

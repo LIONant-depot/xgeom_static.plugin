@@ -11,6 +11,7 @@
 #include "dependencies/xLIONRender/src/xlionrender.h"
 #include "source/Tools/xgpu_xcore_bitmap_helpers.h"
 #include "dependencies/xeditor_tools/src/xeditor_tools_grid.h"
+#include "dependencies/xeditor_tools/src/xeditor_tools_camera.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
@@ -307,55 +308,29 @@ namespace xgeom_static_editor::preview
             m_Grid.Release();
         }
 
-        // Right drag turns the camera, middle drag pans, the wheel zooms; the light-follows-camera key is an action (GeomStatic/Preview/LightFollowsCamera).
+        // The camera is xeditor_tools' (xeditor_tools_camera.h): Orbit or Fly, F switches. The light-follows-camera key is an action (GeomStatic/Preview/LightFollowsCamera).
         // Call right after the preview canvas item was submitted.
         void HandleInput() noexcept
         {
-            if (!ImGui::IsItemHovered() && !ImGui::IsItemActive()) return;
-            auto& io = ImGui::GetIO();
-            auto& S  = m_Settings;
+            auto& S = m_Settings;
+            const xeditor_tools::camera_rig Rig{ S.m_Camera, S.m_View, S.m_Angles, S.m_Distance, S.m_CameraTarget };
+            xeditor_tools::HandleCameraInput(Rig);
+        }
 
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
-            {
-                S.m_Angles.m_Pitch.m_Value -= 0.01f * io.MouseDelta.y;
-                S.m_Angles.m_Yaw.m_Value   -= 0.01f * io.MouseDelta.x;
-            }
+        // F in Fly frames the subject (the center of its bounding box) and goes to Orbit around it: the next Render fits the geometry again (the angles stay).
+        // Call each frame; the toolbar button can raise it too.
+        void ApplyCameraFrame() noexcept
+        {
+            if (!m_Settings.m_Camera.m_bFrame) return;
+            m_Settings.m_Camera.m_bFrame = false;
+            m_Settings.m_Distance = -1;
+        }
 
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Middle))
-            {
-                S.m_CameraTarget += S.m_View.getWorldYVector() * (0.005f * io.MouseDelta.y);
-                S.m_CameraTarget += S.m_View.getWorldXVector() * (0.005f * io.MouseDelta.x);
-            }
-
-            if (S.m_Distance != -1)
-            {
-                S.m_Distance += S.m_Distance * -0.2f * io.MouseWheel;
-                if (S.m_Distance < 0.5f)
-                {
-                    S.m_CameraTarget += S.m_View.getWorldZVector() * (0.5f * (0.5f - S.m_Distance));
-                    S.m_Distance = 0.5f;
-                }
-            }
-
-            // F (light follows the camera) is the GeomStatic/Preview/LightFollowsCamera action (xgeom_static_editor.h).
-
-            // WASD/QE fly, same extension as xeditor_tools::camera - kept as a local copy rather than
-            // inheriting that class here since render_settings is xproperty-reflected with its own field
-            // names (m_CameraTarget, no m_bReframe) shared with the thumbnail renderer; unifying that is
-            // its own separate pass.
-            if (!io.WantTextInput)
-            {
-                constexpr float FlySpeed = 1.0f;   // matches xeditor_tools::camera's own default
-                const float Speed = FlySpeed * std::max(S.m_Distance, 0.1f) * io.DeltaTime;
-                xmath::fvec3 Move(0, 0, 0);
-                if (ImGui::IsKeyDown(ImGuiKey_W)) Move += S.m_View.getWorldZVector();
-                if (ImGui::IsKeyDown(ImGuiKey_S)) Move -= S.m_View.getWorldZVector();
-                if (ImGui::IsKeyDown(ImGuiKey_A)) Move += S.m_View.getWorldXVector();
-                if (ImGui::IsKeyDown(ImGuiKey_D)) Move -= S.m_View.getWorldXVector();
-                if (ImGui::IsKeyDown(ImGuiKey_E)) Move += S.m_View.getWorldYVector();
-                if (ImGui::IsKeyDown(ImGuiKey_Q)) Move -= S.m_View.getWorldYVector();
-                if (Move.Length() > 0.0f) S.m_CameraTarget += Move.Normalize() * Speed;
-            }
+        // The target / speed overlay of the camera: call it after the render callback of the canvas was added (it draws over the scene), still right after the canvas item
+        void DrawOverlay() noexcept
+        {
+            auto& S = m_Settings;
+            xeditor_tools::DrawCameraOverlay({ S.m_Camera, S.m_View, S.m_Angles, S.m_Distance, S.m_CameraTarget });
         }
 
         // The light's view: the geometry into the shadow map. Opens its own render pass on the window, so it must run before the frame's
@@ -438,6 +413,9 @@ namespace xgeom_static_editor::preview
                 if (!Ok(m_Renderer.CreateView(m_RenderView, { .m_Width = W, .m_Height = H }))) return;
 
             RenderShadow(Window, Geom, ViewW, ViewH);
+            S.m_Camera.m_Subject  = Geom.m_BBox.getCenter();      // the FOV of the Fly camera keeps the geometry the same size
+            S.m_Camera.m_bSubject = true;
+            S.m_Camera.m_SubjectRadius = Geom.m_BBox.getRadius();
 
             if (S.m_Distance == -1)
             {
@@ -475,6 +453,7 @@ namespace xgeom_static_editor::preview
                                         : S.m_GIView == render_settings::gi_view::SURFACE_COLOR ? dbg::SURFACE_COLOR
                                         : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
+            Scene.m_GI.m_Saturation = S.m_GISaturation;
             Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
@@ -486,7 +465,7 @@ namespace xgeom_static_editor::preview
                 m_EnvInstance = S.m_Environment.m_Instance.m_Value;
             }
             if (const xgpu::texture* pEnv = m_EnvRef.empty() ? nullptr : xresource::g_Mgr.getResource(m_EnvRef); pEnv && pEnv->isCubemap())
-                Scene.m_Sky = { .m_Intensity = 1, .m_pCubemap = pEnv };
+                Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
         }

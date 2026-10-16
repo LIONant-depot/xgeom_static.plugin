@@ -8,6 +8,7 @@
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "dependencies/xeditor/include/xeditor/hint.h"
 #include "source/Tools/Editor/xeditor_camera.h"
+#include "source/Tools/Editor/xeditor_camera_toolbar.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
 #include "plugins/xmaterial_instance.plugin/source/Editor/xmaterial_instance_import_editor.h"
@@ -160,7 +161,7 @@ namespace xgeom_static_editor
         , obj_scope<"Preview"
             , obj_action<"LightFollowsCamera", &geom_static_actions::LightFollowsCamera
                 , member_help<"The light of the preview follows the camera, or stays where it is">
-                , ximgui::actions::member_keys<"F"> >
+                , ximgui::actions::member_keys<"L"> >
             >
         )
     };
@@ -172,6 +173,7 @@ namespace xgeom_static_editor
         xgeom_static::details               m_Details;                  // the scene nodes, from the compiler's log (empty until the first compile)
         node_cmd                            m_AddToNewGroup, m_AddToGroup, m_RemoveFromGroup, m_DeleteNode, m_UndeleteNode;
         list_nodes_cmd                      m_ListNodes;
+        xeditor::camera_toolbar             m_CameraToolbar;
         xmaterial_instance::import::editor::session_part m_Import;      // SetImportMaterials, DuplicateImportedMaterial, the slots' override arrows
 
         preview::runtime                    m_Preview;
@@ -205,8 +207,9 @@ namespace xgeom_static_editor
                     const int  n    = m_Preview.m_Renderer.DumpGI(Path.c_str());
                     return n < 0 ? std::string("DumpGI: no GI (turn a GI view on)") : std::format("DumpGI: ok\nSurfels={}\nFile={}", n, Path);
                 })
-            , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); } })
+            , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); }, &m_Preview.m_Settings.m_Camera })
         {
+            if (pDevice) m_CameraToolbar.Init(Guid.m_Instance.m_Value);
             for (auto* pInspector : { &m_DescriptorInspector.m_Inspector, &m_SettingsInspector.m_Inspector })
                 xresource_editor::WireResourcePickerCallbacks(*pInspector);
             m_Import.RegisterRowLabels(m_DescriptorInspector.m_Inspector);       // the material slots: names, override arrows, Duplicate as override
@@ -271,7 +274,13 @@ namespace xgeom_static_editor
             if (m_Document.Snapshot() != Before) m_Document.m_bDirty = true;
         }
 
+        // The preview with the toolbar of the camera (the Level editor's kind of toolbar: the user puts it where it suits)
         void RenderPreview() noexcept
+        {
+            m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_Settings.m_Camera, [this] { RenderPreviewBody(); });
+        }
+
+        void RenderPreviewBody() noexcept
         {
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
             const ImVec2 Min   = ImGui::GetCursorScreenPos();
@@ -282,6 +291,7 @@ namespace xgeom_static_editor
             ImGui::InvisibleButton("##GeomPreviewCanvas", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
             xeditor::PreviewGestures();
             m_Preview.HandleInput();
+            m_Preview.ApplyCameraFrame();
 
             auto* pHost   = xeditor::host::current();
             auto* pWindow = pHost ? pHost->find<xgpu::window>() : nullptr;
@@ -299,6 +309,7 @@ namespace xgeom_static_editor
                 if (m_bOpen) m_Preview.m_Renderer.Blit(CmdBuffer, m_Preview.m_RenderView);
             });
             ImGui::PopClipRect();
+            m_Preview.DrawOverlay();
         }
 
         // The scene nodes, in their own panel. Right click: merge groups and deleting. Every action is a command, run once the tree is drawn.
