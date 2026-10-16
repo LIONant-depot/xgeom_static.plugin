@@ -470,7 +470,7 @@ namespace xgeom_static_editor::preview
                 Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
-            if (pHost && Scene.m_GI.m_bEnable) pHost->m_GIAllowance.Used(float(m_Renderer.getGIStats().m_TraceMs), false);
+            if (pHost && Scene.m_GI.m_bEnable) pHost->m_GIAllowance.Used(float(m_Renderer.getGIStats().m_UpdateGIMs), false);
         }
 
         // The wire frame, the grid and the tangent/binormal/normal lines, in display colors over the tone-mapped image
