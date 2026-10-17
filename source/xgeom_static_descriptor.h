@@ -30,7 +30,7 @@ namespace xgeom_static
 
     struct gi_settings
     {
-        gi_mode             m_Mode          = gi_mode::RECEIVE_AND_BOUNCE;
+        gi_mode             m_Mode          = gi_mode::OFF;                 // opt-in: a mesh at a wrong scale (cm) would ask the bake for millions of surfels
         gi_density          m_Density       = gi_density::AS_AUTHORED;
         float               m_SurfelSize    = 0.5f;         // the radius of a surfel, mesh units (its parents are 3x)
         bool                m_bLeakProtection = false;      // walls cut the reads (xlionrender::gi::surfel_mesh::m_bLeakProtection)
