@@ -408,7 +408,9 @@ void ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
-        static void RecurseClusterSplit
+        // One step of MakeClusters: c becomes a cluster when it is small enough (MaxExtent, MaxVerts), else its two halves go on Pending
+        // (c2 under c1, so c1 and all it splits into come out first)
+        static void SplitCluster
         ( const std::vector<vertex>&        InputVerts
         , const std::vector<uint32_t>&      InputIndices
         , const TriCluster&                 c
@@ -420,6 +422,7 @@ void ConvertToCompilerMesh(void)
         , std::vector<geom::vertex_extras>& AllExtrasVerts
         , std::vector<geom::cluster_data>&  AllClusterData
         , std::vector<uint32_t>&            AllIndices
+        , std::vector<TriCluster>&          Pending
         )
         {
             if (c.tri_ids.empty()) return;
@@ -442,8 +445,11 @@ void ConvertToCompilerMesh(void)
             float           max_e_uv        = std::max(extent_uv.m_X, extent_uv.m_Y);
             bool            small_extent    = (max_e_pos <= MaxExtent && max_e_uv <= MaxExtent);
 
+            // A single triangle can not be split: when it is bigger than MaxExtent it is still one cluster, its vertices just quantized coarser
+            const bool      single_tri      = (c.tri_ids.size() == 1);
+
             std::unordered_set<uint32_t> used_verts;
-            if (small_extent)
+            if (small_extent || single_tri)
             {
                 for (uint32_t ti : c.tri_ids)
                 {
@@ -454,7 +460,7 @@ void ConvertToCompilerMesh(void)
                 }
             }
 
-            if (small_extent && used_verts.size() <= MaxVerts)
+            if ((small_extent && used_verts.size() <= MaxVerts) || single_tri)
             {
                 // Remap verts locally
                 std::vector<uint32_t> new_vert_ids(used_verts.begin(), used_verts.end());
@@ -642,31 +648,79 @@ void ConvertToCompilerMesh(void)
                     split_pos = (bb_uv.m_MinUV[sub_axis] + bb_uv.m_MaxUV[sub_axis]) * 0.5f;
                 }
 
-                TriCluster c1, c2;
-                for (uint32_t ti : c.tri_ids)
+                // The centroid of a triangle on the split axis
+                const auto Centroid = [&](uint32_t ti) -> float
                 {
                     uint32_t i0 = InputIndices[ti * 3 + 0];
                     uint32_t i1 = InputIndices[ti * 3 + 1];
                     uint32_t i2 = InputIndices[ti * 3 + 2];
-                    float   cent;
 
                     if (is_pos_axis)
                     {
                         xmath::fvec3 cent_pos = (InputVerts[i0].m_Position + InputVerts[i1].m_Position + InputVerts[i2].m_Position) / 3.0f;
-                        cent = cent_pos[sub_axis];
+                        return cent_pos[sub_axis];
                     }
                     else
                     {
                         xmath::fvec2 cent_uv = (InputVerts[i0].m_UVs[0] + InputVerts[i1].m_UVs[0] + InputVerts[i2].m_UVs[0]) / 3.0f;
-                        cent = cent_uv[sub_axis];
+                        return cent_uv[sub_axis];
                     }
+                };
 
-                    if (cent < split_pos)   c1.tri_ids.push_back(ti);
-                    else                    c2.tri_ids.push_back(ti);
+                TriCluster c1, c2;
+                for (uint32_t ti : c.tri_ids)
+                {
+                    if (Centroid(ti) < split_pos)   c1.tri_ids.push_back(ti);
+                    else                            c2.tri_ids.push_back(ti);
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                // The middle of the bounds can leave every centroid on one side (triangles bigger than MaxExtent, a fan out of one corner):
+                // that half is c again and splitting it would never end. Then split at the median centroid, which always gives two smaller halves
+                if (c1.tri_ids.empty() || c2.tri_ids.empty())
+                {
+                    c1.tri_ids = c.tri_ids;
+                    c2.tri_ids.clear();
+
+                    const auto Mid = c1.tri_ids.begin() + c1.tri_ids.size() / 2;
+                    std::nth_element(c1.tri_ids.begin(), Mid, c1.tri_ids.end(), [&](uint32_t a, uint32_t b)
+                    {
+                        const float ca = Centroid(a), cb = Centroid(b);
+                        return ca < cb || (ca == cb && a < b);
+                    });
+                    c2.tri_ids.assign(Mid, c1.tri_ids.end());
+                    c1.tri_ids.erase(Mid, c1.tri_ids.end());
+                }
+
+                Pending.push_back(std::move(c2));
+                Pending.push_back(std::move(c1));
+            }
+        }
+
+        //--------------------------------------------------------------------------------------
+        // Splits the triangles of Root into clusters, depth first (c1 before c2). The halves wait on a heap stack: how deep the split goes
+        // depends on the mesh, and every level holds a cluster and its sets, so a call per level could overflow the thread stack
+
+        static void MakeClusters
+        ( const std::vector<vertex>&        InputVerts
+        , const std::vector<uint32_t>&      InputIndices
+        , const TriCluster&                 Root
+        , uint32_t                          MaxVerts
+        , const float                       MaxExtent
+        , const std::vector<float>&         BinormalSigns
+        , std::vector<geom::cluster>&       OutputClusters
+        , std::vector<geom::vertex>&        AllStaticVerts
+        , std::vector<geom::vertex_extras>& AllExtrasVerts
+        , std::vector<geom::cluster_data>&  AllClusterData
+        , std::vector<uint32_t>&            AllIndices
+        )
+        {
+            std::vector<TriCluster> Pending;
+            Pending.push_back(Root);
+            while (Pending.empty() == false)
+            {
+                const TriCluster c = std::move(Pending.back());
+                Pending.pop_back();
+                SplitCluster(InputVerts, InputIndices, c, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, Pending);
             }
         }
 
@@ -773,7 +827,7 @@ void ConvertToCompilerMesh(void)
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
+                        MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
