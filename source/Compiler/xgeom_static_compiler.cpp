@@ -1124,6 +1124,10 @@ void ConvertToCompilerMesh(void)
         //--------------------------------------------------------------------------------------
         // GI: the surfels of the final geometry (its quantized vertices, in the GPU buffer's order: what the renderer reads), baked with the
         // renderer's own bake, saved in the geometry
+
+        // The most surfels a mesh can have: they are indexed by 16 bits, 0xFFFF is "no surfel" (m_pGIVertSurfel)
+        static constexpr std::size_t max_gi_surfels_v = 0xFFFE;
+
         void BakeGI()
         {
             namespace gi = xlionrender::gi;
@@ -1133,6 +1137,32 @@ void ConvertToCompilerMesh(void)
             gi::surfel_mesh M;
             gi::FromXGeomStatic(M, m_FinalGeom);
             const float R = std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f);
+
+            // The bake keeps about one surfel per R^2 of surface (Poisson disks of radius R over the triangles, see surfel_mesh::Bake), and
+            // its time and memory grow with that: a mesh whose surface asks for more surfels than a mesh can have is not baked (a room
+            // modeled in cm with a SurfelSize in m would take gigabytes and end at the limit check after the bake anyway)
+            double Area = 0;
+            {
+                BBox3 Box;
+                for (const auto& T : M.m_Tris)
+                {
+                    const auto& A = M.m_Pos[T[0]];
+                    const auto& B = M.m_Pos[T[1]];
+                    const auto& C = M.m_Pos[T[2]];
+                    Area += 0.5 * double((B - A).Cross(C - A).Length());
+                    Box.Update(A); Box.Update(B); Box.Update(C);
+                }
+                const double Estimate = Area / (double(R) * double(R));
+                if (Estimate > double(max_gi_surfels_v))
+                {
+                    const auto Size = Box.m_MaxPos - Box.m_MinPos;
+                    LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh: it would need about {:.0f} surfels (its surface, {:.0f} square units, over SurfelSize {} squared), more than a mesh can have ({}). The mesh is {:.1f} x {:.1f} x {:.1f} units: its scale is probably wrong (imported in cm?) or the SurfelSize is too small"
+                              , Estimate, Area, R, max_gi_surfels_v, Size.m_X, Size.m_Y, Size.m_Z));
+                    m_FinalGeom.m_GIMode = xgeom_static::gi_mode::OFF;
+                    return;
+                }
+            }
+
             M.m_bLeakProtection = m_Descriptor.m_GI.m_bLeakProtection;
             M.Bake(R, 3 * R);
             {
@@ -1165,9 +1195,9 @@ void ConvertToCompilerMesh(void)
                     LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI hole at {:.2f},{:.2f},{:.2f} normal {:.2f},{:.2f},{:.2f}: {} listed, nearest compatible surfel {:.2f}, nearest any {:.2f}"
                               , E.m_P.m_X, E.m_P.m_Y, E.m_P.m_Z, E.m_N.m_X, E.m_N.m_Y, E.m_N.m_Z, E.m_nList, E.m_NearestCompatible, E.m_NearestAny));
             }
-            if (M.m_Levels[0].size() >= 0xFFFF)
+            if (M.m_Levels[0].size() > max_gi_surfels_v)
             {
-                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI: {} surfels, more than a mesh can have (65534): no GI for this geometry, a bigger SurfelSize has fewer", M.m_Levels[0].size()));
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI: {} surfels, more than a mesh can have ({}): no GI for this geometry, a bigger SurfelSize has fewer", M.m_Levels[0].size(), max_gi_surfels_v));
                 return;
             }
 
