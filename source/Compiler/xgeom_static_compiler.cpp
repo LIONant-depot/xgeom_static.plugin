@@ -408,14 +408,16 @@ void ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
-        // One step of MakeClusters: c becomes a cluster when it is small enough (MaxExtent, MaxVerts), else its two halves go on Pending
-        // (c2 under c1, so c1 and all it splits into come out first)
+        // One step of MakeClusters: c becomes a cluster when it fits the budget (MaxVerts) and its UVs span no more than MaxUVExtent, else its two
+        // halves go on Pending (c2 under c1, so c1 and all it splits into come out first). The world size of c does not split it: each cluster's
+        // positions are quantized relative to its own bounds (16 bits over its extent: a precision of extent / 65535, the 1 mm target up to 65.5 units and coarser past it), so a big
+        // object is as many clusters as a small one with the same vertices - splitting by world extent made the clusters (the draws) grow with the area
         static void SplitCluster
         ( const std::vector<vertex>&        InputVerts
         , const std::vector<uint32_t>&      InputIndices
         , const TriCluster&                 c
         , uint32_t                          MaxVerts
-        , const float                       MaxExtent
+        , const float                       MaxUVExtent
         , const std::vector<float>&         BinormalSigns
         , std::vector<geom::cluster>&       OutputClusters
         , std::vector<geom::vertex>&        AllStaticVerts
@@ -441,11 +443,10 @@ void ConvertToCompilerMesh(void)
 
             xmath::fvec3    extent_pos      = bb_pos.m_MaxPos - bb_pos.m_MinPos;
             xmath::fvec2    extent_uv       = bb_uv.m_MaxUV - bb_uv.m_MinUV;
-            float           max_e_pos       = std::max({ extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z });
             float           max_e_uv        = std::max(extent_uv.m_X, extent_uv.m_Y);
-            bool            small_extent    = (max_e_pos <= MaxExtent && max_e_uv <= MaxExtent);
+            bool            small_extent    = (max_e_uv <= MaxUVExtent);       // the UVs: 16 bits over the cluster's UV span (texture space, not world size)
 
-            // A single triangle can not be split: when it is bigger than MaxExtent it is still one cluster, its vertices just quantized coarser
+            // A single triangle can not be split: when its UVs span more than MaxUVExtent it is still one cluster, its UVs just quantized coarser
             const bool      single_tri      = (c.tri_ids.size() == 1);
 
             std::unordered_set<uint32_t> used_verts;
@@ -674,7 +675,7 @@ void ConvertToCompilerMesh(void)
                     else                            c2.tri_ids.push_back(ti);
                 }
 
-                // The middle of the bounds can leave every centroid on one side (triangles bigger than MaxExtent, a fan out of one corner):
+                // The middle of the bounds can leave every centroid on one side (big triangles, a fan out of one corner):
                 // that half is c again and splitting it would never end. Then split at the median centroid, which always gives two smaller halves
                 if (c1.tri_ids.empty() || c2.tri_ids.empty())
                 {
@@ -705,7 +706,7 @@ void ConvertToCompilerMesh(void)
         , const std::vector<uint32_t>&      InputIndices
         , const TriCluster&                 Root
         , uint32_t                          MaxVerts
-        , const float                       MaxExtent
+        , const float                       MaxUVExtent
         , const std::vector<float>&         BinormalSigns
         , std::vector<geom::cluster>&       OutputClusters
         , std::vector<geom::vertex>&        AllStaticVerts
@@ -720,7 +721,7 @@ void ConvertToCompilerMesh(void)
             {
                 const TriCluster c = std::move(Pending.back());
                 Pending.pop_back();
-                SplitCluster(InputVerts, InputIndices, c, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, Pending);
+                SplitCluster(InputVerts, InputIndices, c, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, Pending);
             }
         }
 
@@ -742,7 +743,7 @@ void ConvertToCompilerMesh(void)
             std::uint16_t                       current_lod_idx         = 0;
             std::uint16_t                       current_submesh_idx     = 0;
             std::uint16_t                       current_cluster_idx     = 0;
-            float                               max_extent              = target_precision * 65535.0f;
+            float                               max_uv_extent           = target_precision * 65535.0f;     // UV units: 16 bits at target_precision
 
             for (const auto& input_mesh : compiler_meshes)
             {
@@ -827,7 +828,7 @@ void ConvertToCompilerMesh(void)
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
+                        MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
