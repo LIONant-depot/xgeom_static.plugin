@@ -1435,6 +1435,7 @@ void ConvertToCompilerMesh(void)
                 , .m_Settings           = m_Descriptor.m_ImportMaterials
                 , .m_Dependencies       = m_Dependencies
                 , .m_Warning            = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
+                , .m_Info               = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::INFO, std::move(Text)); }
                 };
                 Emitter.Emit(m_RawGeom.m_MaterialInstance);
                 displayProgressBar("Importing Materials", 1);
