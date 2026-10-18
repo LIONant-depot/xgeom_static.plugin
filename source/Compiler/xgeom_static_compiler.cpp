@@ -25,6 +25,7 @@
 #include <vector>
 #include <algorithm>
 #include <unordered_set>
+#include <optional>
 #include <iostream>
 
 namespace xgeom_static_compiler
@@ -85,6 +86,7 @@ namespace xgeom_static_compiler
             Settings.m_bStaticGeometry = true;
             Settings.m_pGeom = &m_RawGeom;
             Settings.m_pNode = &m_RootNode;
+            Settings.m_pUnits = &m_Units;
 
             if ( auto Err = Importer.Import(Path, Settings); Err )
                 return xerr::create_f<state, "Failed to import the asset">(Err);
@@ -1129,43 +1131,71 @@ void ConvertToCompilerMesh(void)
         // The most surfels a mesh can have: they are indexed by 16 bits, 0xFFFF is "no surfel" (m_pGIVertSurfel)
         static constexpr std::size_t max_gi_surfels_v = 0xFFFE;
 
+        // A suggested SurfelSize, rounded UP to 2 significant digits (0.0125 -> 0.013): with a fixed 2 decimals a small one read as the size that did not fit
+        static float SuggestSurfelSize(float S) noexcept { const float P = std::pow(10.0f, std::floor(std::log10(S)) - 1); return std::ceil(S / P - 1e-3f) * P; }
+
+        // GI: whether the bake fits (max_gi_surfels_v), checked on the mesh once scaled (and split), before anything else is made of it: the
+        // bake's own count (surfel_mesh::CountSurfels: its surfels alone, stopped past the limit, seconds where the whole bake takes minutes).
+        // Too many: a warning with the smallest SurfelSize that fits, and this compile has no GI (the rest of it as usual)
+        void PrecheckGI()
+        {
+            if (m_Descriptor.m_GI.m_Mode == xgeom_static::gi_mode::OFF) return;
+            xlionrender::gi::surfel_mesh M;
+            BBox3 Box;
+            M.m_Pos.reserve(m_RawGeom.m_Vertex.size());
+            M.m_Nrm.reserve(m_RawGeom.m_Vertex.size());
+            for (const auto& V : m_RawGeom.m_Vertex) { M.m_Pos.push_back(V.m_Position); M.m_Nrm.push_back(V.m_BTN[0].m_Normal); Box.Update(V.m_Position); }
+            M.m_Tris.reserve(m_RawGeom.m_Facet.size());
+            for (const auto& F : m_RawGeom.m_Facet) M.m_Tris.push_back({ int(F.m_iVertex[0]), int(F.m_iVertex[1]), int(F.m_iVertex[2]) });
+
+            const float       R = std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f);
+            // Without the rays first (cheap, and a lower bound: over the limit there is over it in the bake), then the bake's own count
+            std::size_t n = M.CountSurfels(R, max_gi_surfels_v, false);
+            if (n <= max_gi_surfels_v) n = M.CountSurfels(R, max_gi_surfels_v);
+            if (n <= max_gi_surfels_v)
+            {
+                LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} surfels at SurfelSize {} (a mesh can have {})", n, R, max_gi_surfels_v));
+                return;
+            }
+
+            // The smallest SurfelSize that fits: where the count without the rays does (cheap, a lower bound: doubling until one does, then
+            // halving the gap a few times), then up from there until the bake's own count does
+            const auto Fits = [&](float S, bool bRays) { return M.CountSurfels(S, max_gi_surfels_v, bRays) <= max_gi_surfels_v; };
+            float Lo = R, Hi = 0;
+            for (float S = 2 * R; S <= 1024 * R && Hi == 0; S *= 2) (Fits(S, false) ? Hi : Lo) = S;
+            if (Hi > 0) for (int i = 0; i < 3; ++i) { const float S = 0.5f * (Lo + Hi); (Fits(S, false) ? Hi : Lo) = S; }
+            for (int i = 0; Hi > 0 && i < 8 && !Fits(Hi, true); ++i) Hi *= 1.25f;
+
+            const auto Size = Box.m_MaxPos - Box.m_MinPos;
+            LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh (too many surfels, found before the bake): at SurfelSize {} it needs more than {} surfels, the most one mesh can have. {} The mesh is {:.1f} x {:.1f} x {:.1f} units, {} triangles"
+                      , R, max_gi_surfels_v
+                      , Hi > 0 ? std::format("Set GI SurfelSize to {:g} or more to keep GI.", SuggestSurfelSize(Hi)) : std::format("No SurfelSize up to {} fits: split it into several geometries (or its scale is wrong).", 1024 * R)
+                      , Size.m_X, Size.m_Y, Size.m_Z, M.m_Tris.size()));
+            m_bGITooBig = true;
+        }
+
         void BakeGI()
         {
             namespace gi = xlionrender::gi;
-            m_FinalGeom.m_GIMode = m_Descriptor.m_GI.m_Mode;
-            if (m_Descriptor.m_GI.m_Mode == xgeom_static::gi_mode::OFF) return;
+            m_FinalGeom.m_GIMode = m_bGITooBig ? xgeom_static::gi_mode::OFF : m_Descriptor.m_GI.m_Mode;
+            if (m_FinalGeom.m_GIMode == xgeom_static::gi_mode::OFF) return;
 
             gi::surfel_mesh M;
             gi::FromXGeomStatic(M, m_FinalGeom);
             const float R = std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f);
 
-            // The bake keeps about one surfel per R^2 of surface (Poisson disks of radius R over the triangles, see surfel_mesh::Bake), and
-            // its time and memory grow with that: a mesh whose surface asks for more surfels than a mesh can have is not baked (a room
-            // modeled in cm with a SurfelSize in m would take gigabytes and end at the limit check after the bake anyway)
-            double Area = 0;
+            // Over the limit the bake stops there (PrecheckGI counted on the mesh before its clean up and quantization: the bake's can differ a little)
+            const auto TooMany = [&]
             {
-                BBox3 Box;
-                for (const auto& T : M.m_Tris)
-                {
-                    const auto& A = M.m_Pos[T[0]];
-                    const auto& B = M.m_Pos[T[1]];
-                    const auto& C = M.m_Pos[T[2]];
-                    Area += 0.5 * double((B - A).Cross(C - A).Length());
-                    Box.Update(A); Box.Update(B); Box.Update(C);
-                }
-                const double Estimate = Area / (double(R) * double(R));
-                if (Estimate > double(max_gi_surfels_v))
-                {
-                    const auto Size = Box.m_MaxPos - Box.m_MinPos;
-                    LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh: it would need about {:.0f} surfels (its surface, {:.0f} square units, over SurfelSize {} squared), more than a mesh can have ({}). The mesh is {:.1f} x {:.1f} x {:.1f} units: its scale is probably wrong (imported in cm?) or the SurfelSize is too small"
-                              , Estimate, Area, R, max_gi_surfels_v, Size.m_X, Size.m_Y, Size.m_Z));
-                    m_FinalGeom.m_GIMode = xgeom_static::gi_mode::OFF;
-                    return;
-                }
-            }
+                if (M.m_Levels[0].size() <= max_gi_surfels_v) return false;
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh (too many surfels, found in the bake): at SurfelSize {} the bake passed {} surfels, the most one mesh can have, and was stopped there. Set GI SurfelSize to {:g} or more to keep GI", R, max_gi_surfels_v, SuggestSurfelSize(R * 1.25f)));
+                m_FinalGeom.m_GIMode = xgeom_static::gi_mode::OFF;
+                return true;
+            };
 
             M.m_bLeakProtection = m_Descriptor.m_GI.m_bLeakProtection;
-            M.Bake(R, 3 * R);
+            M.Bake(R, 3 * R, {}, max_gi_surfels_v);
+            if (TooMany()) return;
             {
                 // The per-pixel read's coverage (what the renderer builds at load): reported, with the first holes
                 M.BuildReadGrid();
@@ -1183,7 +1213,8 @@ void ConvertToCompilerMesh(void)
                     if (m_Descriptor.m_GI.m_bPatchDefects)
                     {
                         const auto Forced = M.m_EmptyParts;
-                        M.Bake(R, 3 * R, Forced);
+                        M.Bake(R, 3 * R, Forced, max_gi_surfels_v);
+                        if (TooMany()) return;
                         M.BuildReadGrid();
                         LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI defects patched (PatchDefects): {} surfels added; {} pieces still unserved"
                                   , M.m_FirstPatch == 0xFFFFFFFFu ? 0 : M.m_Levels[0].size() - M.m_FirstPatch, M.m_EmptyParts.size()));
@@ -1198,7 +1229,7 @@ void ConvertToCompilerMesh(void)
             }
             if (M.m_Levels[0].size() > max_gi_surfels_v)
             {
-                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI: {} surfels, more than a mesh can have ({}): no GI for this geometry, a bigger SurfelSize has fewer", M.m_Levels[0].size(), max_gi_surfels_v));
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh (too many surfels, found after the bake): {} surfels at SurfelSize {}, more than one mesh can have ({}). Set GI SurfelSize to {:g} or more to keep GI", M.m_Levels[0].size(), R, max_gi_surfels_v, SuggestSurfelSize(R * std::sqrt(float(M.m_Levels[0].size()) / max_gi_surfels_v) * 1.05f)));
                 return;
             }
 
@@ -1261,6 +1292,7 @@ void ConvertToCompilerMesh(void)
                 // Pre-Transform the verts
                 //
                 if (   m_Descriptor.m_PreTranslation.m_Scale       != xmath::fvec3::fromOne() 
+                    || m_UnitScale                                 != 1
                     || m_Descriptor.m_PreTranslation.m_Translation != xmath::fvec3::fromZero()
                     || m_Descriptor.m_PreTranslation.m_Rotation    != xmath::fvec3::fromZero() )
                 {
@@ -1271,7 +1303,7 @@ void ConvertToCompilerMesh(void)
                     Rot.m_Pitch = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_X) };
                     Rot.m_Yaw   = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_Y) };
 
-                    const xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
+                    const xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale * m_UnitScale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
                     const xmath::fmat3 M2(Rot);
                     for (auto& E : m_RawGeom.m_Vertex )
                     {
@@ -1303,14 +1335,25 @@ void ConvertToCompilerMesh(void)
                 //
                 // GI: vertices where they are sparser than the surfels (before the tangents: they are computed for the new ones too)
                 //
+                std::optional<xraw3d::geom> Unsplit;                    // the mesh as it was, for when the GI does not fit
                 if (m_Descriptor.m_GI.m_Mode != xgeom_static::gi_mode::OFF && m_Descriptor.m_GI.m_Density == xgeom_static::gi_density::SPLIT_TRIANGLES)
                 {
+                    Unsplit = m_RawGeom;
                     displayProgressBar("Splitting triangles for the GI", 0);
                     const auto nFacets = m_RawGeom.m_Facet.size();
                     const auto nAdded  = SplitTrianglesForGI(std::max(m_Descriptor.m_GI.m_SurfelSize, 0.01f), std::max<std::size_t>(nFacets * 16, 1u << 20));
                     LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} triangles split into {}", nFacets, nFacets + nAdded));
                     displayProgressBar("Splitting triangles for the GI", 1);
                 }
+
+                //
+                // GI: whether the bake fits, before anything else is made of the mesh (the bake is the longest part of a compile)
+                //
+                displayProgressBar("Checking the GI surfels", 0);
+                PrecheckGI();
+                if (m_bGITooBig && Unsplit) m_RawGeom = std::move(*Unsplit);      // no GI: its triangles as they were
+                Unsplit.reset();
+                displayProgressBar("Checking the GI surfels", 1);
 
                 //
                 // Clean the mesh
@@ -1500,6 +1543,14 @@ void ConvertToCompilerMesh(void)
                 return Err;
             displayProgressBar("Loading Mesh", 1);
 
+            // AutoUnits (a new descriptor): the source to meters, by what its file says or a guess from its size (a level is up to 1000 m)
+            if (m_Descriptor.m_PreTranslation.m_bAutoUnits)
+            {
+                const auto Units = xraw3d::assimp_v3::ResolveUnits(m_Units, m_RawGeom.m_Vertex, 1000.0f);
+                m_UnitScale = Units.m_MetersPerUnit;
+                LogMessage(xresource_pipeline::msg_type::INFO, std::format("AutoUnits: {}", Units.m_Reason));
+            }
+
             //
             // Fill the detail structure
             //
@@ -1589,7 +1640,10 @@ void ConvertToCompilerMesh(void)
         xgeom_static::geom              m_FinalGeom;
         std::vector<mesh>               m_CompilerMesh;
         xraw3d::geom                    m_RawGeom;
+        bool                            m_bGITooBig     { false };      // PrecheckGI: the bake would not fit, no GI this compile
         xraw3d::assimp_v3::node         m_RootNode;
+        xraw3d::assimp_v3::units        m_Units;                        // of the source file (LoadRaw)
+        float                           m_UnitScale     { 1 };          // AutoUnits: the source to meters, before the PreTranslation
     };
 
     //------------------------------------------------------------------------------------

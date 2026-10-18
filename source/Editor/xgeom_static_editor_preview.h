@@ -16,6 +16,7 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
 #include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_editor_inspectors.h"
+#include "source/Tools/Editor/xeditor_scale_reference.h"
 
 #include <array>
 #include <cstdio>
@@ -103,6 +104,7 @@ namespace xgeom_static_editor::preview
         xlionrender::mesh_id                    m_Mesh;
         const geom*                             m_pMeshGeom = nullptr;  // the geometry m_Mesh was made from (Render rebuilds for another one)
         bool                                    m_bGIReady = false;     // the mesh has its surfels (the first GI view after a load)
+        xmath::fmat4                            m_PendingL2W = xmath::fmat4::fromIdentity();   // the editor: the mesh at the Scale/Translation being edited, before it is compiled (xeditor_scale_reference.h)
         std::vector<xlionrender::material_id>   m_Materials;    // one per material slot of the geometry
 
         // The ground grid and the shadow map this runtime's own shadow-caster pipeline (m_ShadowPipeline
@@ -370,8 +372,8 @@ namespace xgeom_static_editor::preview
 
             {
                 auto& Entry = m_ShadowUBO.allocEntry<ubo_shadow_generation>();
-                Entry.m_L2C = S.m_LightingView.getW2C();
-                m_ShadowL2C = Entry.m_L2C;
+                Entry.m_L2C = S.m_LightingView.getW2C() * m_PendingL2W;
+                m_ShadowL2C = S.m_LightingView.getW2C();
             }
 
             CmdBuffer.setBuffer(Geom.IndexBuffer());
@@ -438,7 +440,7 @@ namespace xgeom_static_editor::preview
             // are sized to the geometry), with a soft fill
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
-            Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials, .m_Instance = 1 });
+            Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_L2W = m_PendingL2W, .m_Materials = m_Materials, .m_Instance = 1 });
 
             // The GI views: the surfels the compiler baked (the first time one is asked for after a load), solved every frame
             if (S.m_GIView != render_settings::gi_view::OFF)
@@ -493,7 +495,7 @@ namespace xgeom_static_editor::preview
 
                 auto& MeshUBO = m_WireUBO.allocEntry<ubo_wireframe>();
                 MeshUBO.m_w2C = w2C;
-                MeshUBO.m_L2w = L2w;
+                MeshUBO.m_L2w = L2w * m_PendingL2W;
                 CmdBuffer.setDynamicUBO(m_WireUBO, 0);
                 CmdBuffer.setBuffer(Geom.IndexBuffer());           // (the overlay pass starts with the renderer's buffers bound)
                 CmdBuffer.setBuffer(Geom.VertexBuffer());
@@ -502,7 +504,9 @@ namespace xgeom_static_editor::preview
 
             // The grid sits at the bottom of the geometry
             {
-                S.m_GridYMin = S.m_bGridToYMin ? Geom.m_BBox.m_Min.m_Y : 0;
+                xmath::fvec3 BoxMin = Geom.m_BBox.m_Min, BoxMax = Geom.m_BBox.m_Max;
+                xeditor::scale_reference::TransformBox(m_PendingL2W, BoxMin, BoxMax);     // the mesh as drawn (the Scale being edited)
+                S.m_GridYMin = S.m_bGridToYMin ? BoxMin.m_Y : 0;
                 m_Grid.Draw(CmdBuffer, S.m_View.getW2C(), S.m_View.getPosition(), m_ShadowL2C, S.m_GridYMin);
                 S.m_GridYMin = Geom.m_BBox.m_Min.m_Y;       // the property shows where the geometry ends, whatever the grid does
             }
@@ -520,7 +524,7 @@ namespace xgeom_static_editor::preview
                     CmdBuffer.setPipelineInstance(m_NormalInstance, StaticUBO);
 
                     auto& MeshUBO         = m_NormalUBO.allocEntry<ubo_debug_normal>();
-                    MeshUBO.m_L2C         = w2C * L2w;
+                    MeshUBO.m_L2C         = w2C * L2w * m_PendingL2W;
                     MeshUBO.m_ScaleFactor = Axis[i];
                     MeshUBO.m_ScaleFactor.m_W = Geom.m_BBox.getRadius();
                     MeshUBO.m_Color       = Colors[i];

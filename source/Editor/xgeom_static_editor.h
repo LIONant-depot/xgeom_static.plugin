@@ -10,6 +10,7 @@
 #include "source/Tools/Editor/xeditor_camera.h"
 #include "source/Tools/Editor/xeditor_camera_toolbar.h"
 #include "source/Tools/Editor/xeditor_mesh_budget.h"
+#include "source/Tools/Editor/xeditor_transform_gizmo.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
 #include "plugins/xmaterial_instance.plugin/source/Editor/xmaterial_instance_import_editor.h"
@@ -180,7 +181,9 @@ namespace xgeom_static_editor
 
         preview::runtime                    m_Preview;
         geom_static_actions                 m_EditorActions{ *this };       // this editor's own keys (Preview/...)
-        void RegisterActions(ximgui::actions::context& Ctx) noexcept override { Ctx.Scope(m_EditorActions, "Preview"); }
+        xeditor::transform_gizmo::state     m_Gizmo;                        // the Move / Rotate / Scale gizmo of the preview: the descriptor's PreTranslation
+        xeditor::transform_gizmo::actions   m_GizmoActions{ m_Gizmo };      // its keys (Preview/ToolMove...)
+        void RegisterActions(ximgui::actions::context& Ctx) noexcept override { Ctx.Scope(m_EditorActions, "Preview"); Ctx.Scope(m_GizmoActions, "Preview"); }
         static_geom_inspector               m_Info;
         xeditor::set_preview_cmd<render_settings>  m_SetPreview;
         xeditor::list_preview_cmd<render_settings> m_ListPreview;
@@ -190,6 +193,7 @@ namespace xgeom_static_editor
         xeditor::inspector_panel            m_SettingsInspector{ "Rendering Settings" };
         xrsc::geom_static                   m_GeomRef;
         bool                                m_bHasGeom = false;         // the compiled geometry is loaded and drawable
+        xeditor::transform_gizmo::pre       m_Compiled;                 // the PreTranslation the loaded geometry was compiled with: the preview shows the one being edited against it
 
         session(xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
             : descriptor_editor("StaticGeom", Guid, LibraryGuid, pDevice)
@@ -211,7 +215,7 @@ namespace xgeom_static_editor
                 })
             , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); }, &m_Preview.m_Settings.m_Camera })
         {
-            if (pDevice) m_CameraToolbar.Init(Guid.m_Instance.m_Value, 380.0f, 230.0f);      // with the Boxes and Budget
+            if (pDevice) m_CameraToolbar.Init(Guid.m_Instance.m_Value, 636.0f, 412.0f);      // with the Boxes, Budget, Human and the gizmo's tools
             for (auto* pInspector : { &m_DescriptorInspector.m_Inspector, &m_SettingsInspector.m_Inspector })
                 xresource_editor::WireResourcePickerCallbacks(*pInspector);
             m_Import.RegisterRowLabels(m_DescriptorInspector.m_Inspector);       // the material slots: names, override arrows, Duplicate as override
@@ -257,6 +261,11 @@ namespace xgeom_static_editor
 
             m_Info.Update(m_GeomRef, m_Document.m_ResourcePath);
             m_Preview.RebuildMaterials(*pGeom);
+            if (m_Document.m_pDescriptor)
+            {
+                const auto& Pre = static_cast<const xgeom_static::descriptor&>(*m_Document.m_pDescriptor).m_PreTranslation;
+                m_Compiled = xeditor::transform_gizmo::PreOf(Pre);
+            }
             LoadDetails();
         }
 
@@ -280,7 +289,12 @@ namespace xgeom_static_editor
         void RenderPreview() noexcept
         {
             m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_Settings.m_Camera, [this] { RenderPreviewBody(); }
-                                  , [this](bool bHorizontal, float ButtonHeight) { xeditor::mesh_budget::Buttons(m_MeshBudget, bHorizontal, ButtonHeight, static_cast<int>(m_Preview.m_Renderer.getNotDrawn().size())); });
+                                  , [this](bool bHorizontal, float ButtonHeight)
+                                    {
+                                        xeditor::mesh_budget::Buttons(m_MeshBudget, bHorizontal, ButtonHeight, static_cast<int>(m_Preview.m_Renderer.getNotDrawn().size()));
+                                        xeditor::scale_reference::Button(bHorizontal, ButtonHeight);
+                                        xeditor::transform_gizmo::Buttons(m_Gizmo, bHorizontal, ButtonHeight);
+                                    });
         }
 
         void RenderPreviewBody() noexcept
@@ -290,10 +304,22 @@ namespace xgeom_static_editor
             // Flat fill behind the grid, matching GeomSkin/Skeleton's preview background - without this,
             // whatever the grid plane doesn't cover (most of the frame, at this camera framing) shows the
             // theme's plain dark panel color instead. The grid itself is untouched.
+            xeditor::transform_gizmo::layer GizmoLayer(m_Gizmo, *ImGui::GetWindowDrawList());     // the gizmo over all of it
             ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetCursorScreenPos(), ImGui::GetCursorScreenPos() + Avail, IM_COL32(115, 115, 115, 255));
-            ImGui::InvisibleButton("##GeomPreviewCanvas", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-            xeditor::PreviewGestures();
-            m_Preview.HandleInput();
+
+            // The gizmo (W E R) on the descriptor's PreTranslation, before the canvas button: while it is hovered a Dummy stands in for the button
+            // (the camera and the keys still work), and only its drag keeps the camera out
+            bool bGizmo = false;
+            if (m_Preview.m_bReady && m_bHasGeom && m_Document.m_pDescriptor)
+                bGizmo = xeditor::transform_gizmo::Run(m_Gizmo, *this, GizmoLayer, m_Preview.m_Settings.m_View, Min, Avail
+                                                     , xeditor::transform_gizmo::TargetOf(static_cast<xgeom_static::descriptor&>(*m_Document.m_pDescriptor).m_PreTranslation));
+            if (bGizmo) ImGui::Dummy(Avail);
+            else        ImGui::InvisibleButton("##GeomPreviewCanvas", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+            if (!xeditor::transform_gizmo::Dragging())
+            {
+                xeditor::PreviewGestures();
+                m_Preview.HandleInput();
+            }
             m_Preview.ApplyCameraFrame();
 
             auto* pHost   = xeditor::host::current();
@@ -307,6 +333,11 @@ namespace xgeom_static_editor
             // the already display-encoded output again). The clip rect is the viewport the render callback gets.
             m_Preview.m_Renderer.m_bBoxesOnly    = m_MeshBudget.m_bBoxesOnly;      // huge meshes: their boxes, or the clusters the frame budget allows
             m_Preview.m_Renderer.m_FrameBudgetMs = m_MeshBudget.FrameBudgetMs();
+            if (m_Document.m_pDescriptor)
+            {
+                const auto& Pre = static_cast<const xgeom_static::descriptor&>(*m_Document.m_pDescriptor).m_PreTranslation;
+                m_Preview.m_PendingL2W = xeditor::transform_gizmo::PendingTransform(m_Compiled, xeditor::transform_gizmo::PreOf(Pre));
+            }
             m_Preview.Render(*pWindow, *pGeom, Avail.x, Avail.y);
             ImGui::PushClipRect(Min, Min + Avail, true);
             xgpu::tools::imgui::AddCustomRenderCallback([this](xgpu::cmd_buffer& CmdBuffer, const ImVec2&, const ImVec2&)
@@ -315,6 +346,11 @@ namespace xgeom_static_editor
             });
             ImGui::PopClipRect();
             xeditor::mesh_budget::DrawBoxes(*ImGui::GetWindowDrawList(), m_Preview.m_Settings.m_View.getW2C(), Min, Avail, m_Preview.m_Renderer.getNotDrawn());     // what it did not draw
+            {   // the human scale reference: 1.8 m beside the mesh as drawn (the Scale being edited)
+                xmath::fvec3 BoxMin = pGeom->m_BBox.m_Min, BoxMax = pGeom->m_BBox.m_Max;
+                xeditor::scale_reference::TransformBox(m_Preview.m_PendingL2W, BoxMin, BoxMax);
+                xeditor::scale_reference::DrawBesideBox(*ImGui::GetWindowDrawList(), m_Preview.m_Settings.m_View.getW2C(), m_Preview.m_Settings.m_View.getPosition(), Min, Avail, BoxMin, BoxMax);
+            }
             m_Preview.DrawOverlay();
         }
 
