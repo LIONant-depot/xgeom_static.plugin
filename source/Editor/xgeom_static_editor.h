@@ -9,6 +9,7 @@
 #include "dependencies/xeditor/include/xeditor/hint.h"
 #include "source/Tools/Editor/xeditor_camera.h"
 #include "source/Tools/Editor/xeditor_camera_toolbar.h"
+#include "source/Tools/Editor/xeditor_mesh_budget.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "plugins/xgeom_static.plugin/source/xgeom_static_descriptor.h"
 #include "plugins/xmaterial_instance.plugin/source/Editor/xmaterial_instance_import_editor.h"
@@ -174,6 +175,7 @@ namespace xgeom_static_editor
         node_cmd                            m_AddToNewGroup, m_AddToGroup, m_RemoveFromGroup, m_DeleteNode, m_UndeleteNode;
         list_nodes_cmd                      m_ListNodes;
         xeditor::camera_toolbar             m_CameraToolbar;
+        xeditor::mesh_budget::state         m_MeshBudget;               // the toolbar's Boxes and Budget (huge meshes): drawn, never saved
         xmaterial_instance::import::editor::session_part m_Import;      // SetImportMaterials, DuplicateImportedMaterial, the slots' override arrows
 
         preview::runtime                    m_Preview;
@@ -209,7 +211,7 @@ namespace xgeom_static_editor
                 })
             , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); }, &m_Preview.m_Settings.m_Camera })
         {
-            if (pDevice) m_CameraToolbar.Init(Guid.m_Instance.m_Value);
+            if (pDevice) m_CameraToolbar.Init(Guid.m_Instance.m_Value, 380.0f, 230.0f);      // with the Boxes and Budget
             for (auto* pInspector : { &m_DescriptorInspector.m_Inspector, &m_SettingsInspector.m_Inspector })
                 xresource_editor::WireResourcePickerCallbacks(*pInspector);
             m_Import.RegisterRowLabels(m_DescriptorInspector.m_Inspector);       // the material slots: names, override arrows, Duplicate as override
@@ -277,7 +279,8 @@ namespace xgeom_static_editor
         // The preview with the toolbar of the camera (the Level editor's kind of toolbar: the user puts it where it suits)
         void RenderPreview() noexcept
         {
-            m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_Settings.m_Camera, [this] { RenderPreviewBody(); });
+            m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_Settings.m_Camera, [this] { RenderPreviewBody(); }
+                                  , [this](bool bHorizontal, float ButtonHeight) { xeditor::mesh_budget::Buttons(m_MeshBudget, bHorizontal, ButtonHeight, static_cast<int>(m_Preview.m_Renderer.getNotDrawn().size())); });
         }
 
         void RenderPreviewBody() noexcept
@@ -302,6 +305,8 @@ namespace xgeom_static_editor
 
             // Drawn by xLIONRender into the preview's own view, then blitted as is into the panel (ImGui::Image would gamma encode
             // the already display-encoded output again). The clip rect is the viewport the render callback gets.
+            m_Preview.m_Renderer.m_bBoxesOnly    = m_MeshBudget.m_bBoxesOnly;      // huge meshes: their boxes, or the clusters the frame budget allows
+            m_Preview.m_Renderer.m_FrameBudgetMs = m_MeshBudget.FrameBudgetMs();
             m_Preview.Render(*pWindow, *pGeom, Avail.x, Avail.y);
             ImGui::PushClipRect(Min, Min + Avail, true);
             xgpu::tools::imgui::AddCustomRenderCallback([this](xgpu::cmd_buffer& CmdBuffer, const ImVec2&, const ImVec2&)
@@ -309,6 +314,7 @@ namespace xgeom_static_editor
                 if (m_bOpen) m_Preview.m_Renderer.Blit(CmdBuffer, m_Preview.m_RenderView);
             });
             ImGui::PopClipRect();
+            xeditor::mesh_budget::DrawBoxes(*ImGui::GetWindowDrawList(), m_Preview.m_Settings.m_View.getW2C(), Min, Avail, m_Preview.m_Renderer.getNotDrawn());     // what it did not draw
             m_Preview.DrawOverlay();
         }
 

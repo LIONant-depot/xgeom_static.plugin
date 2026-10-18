@@ -241,29 +241,28 @@ namespace xgeom_static
                     }
                 }
 
-                // Double check the ungroup meshes
+                // Double check the ungroup meshes: each needs a mesh name (the compiler renames the mesh to it); repeated names are found below, with all
+                // the others (sorted: this runs every frame, and an import can have thousands of meshes)
+                std::size_t nUnnamed = 0;
                 for ( int i=0; i<m_UngroupMeshList.size(); i++)
                 {
-                    Names.push_back(m_UngroupMeshList[i].m_MeshDetails.m_Name);
-
-                    for (int j = 0; j < m_UngroupMeshList.size(); j++)
+                    if (m_UngroupMeshList[i].m_MeshDetails.m_Name.empty())
                     {
-                        if (m_UngroupMeshList[i].m_MeshDetails.m_Name == m_UngroupMeshList[j].m_MeshDetails.m_Name)
-                        {
-                            Errors.push_back(std::format("Please keep your mesh names unique because ungroup mesh {} and ungroup mesh {} are using {} as their mesh names", m_UngroupMeshList[i].m_MeshName, m_UngroupMeshList[j].m_MeshName, m_UngroupMeshList[j].m_MeshDetails.m_Name));
-                        }
-
+                        if (nUnnamed++ == 0) Errors.push_back(std::format("Please enter a valid MESH name for ungroup mesh {}", m_UngroupMeshList[i].m_MeshName));
+                        continue;
                     }
+                    Names.push_back(m_UngroupMeshList[i].m_MeshDetails.m_Name);
                 }
+                if (nUnnamed > 1) Errors.push_back(std::format("{} more ungroup meshes have no MESH name", nUnnamed - 1));
 
                 // Group names together
                 std::sort(Names.begin(), Names.end());
 
                 // Finally for a global name collision check
-                for (int i = 0; i < Names.size()-1; i++)
+                for (std::size_t i = 0; i + 1 < Names.size(); i++)
                 {
                     int iCollisions = 0;
-                    for ( int j=i+1; Names[i] == Names[j]; j++ ) iCollisions++;
+                    for ( std::size_t j=i+1; j < Names.size() && Names[i] == Names[j]; j++ ) iCollisions++;
 
                     if (iCollisions)
                     {

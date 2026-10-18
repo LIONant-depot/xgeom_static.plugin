@@ -377,11 +377,12 @@ namespace xgeom_static_editor::preview
             CmdBuffer.setBuffer(Geom.IndexBuffer());
             CmdBuffer.setBuffer(Geom.VertexBuffer());
             CmdBuffer.setDynamicUBO(m_ShadowUBO, 0);
-            DrawClusters(CmdBuffer, Geom);
+            if (!m_Renderer.m_bBoxesOnly) DrawClusters(CmdBuffer, Geom, &m_Renderer, true);    // the toolbar's Boxes: no caster (the map cleared); its Budget: not the boxes
         }
 
-        // Every cluster of every LOD, each with its own index into the cluster table
-        static void DrawClusters(xgpu::cmd_buffer& CmdBuffer, geom& Geom) noexcept
+        // Every cluster of every LOD, each with its own index into the cluster table; but those pRenderer's last scene pass left out (the toolbar's Boxes and Budget: drawn
+        // as their boxes, or outside the view). bCasters (the shadow map): only those drawn as their boxes are left out (what is outside the view still casts into it)
+        static void DrawClusters(xgpu::cmd_buffer& CmdBuffer, geom& Geom, const xlionrender::instance* pRenderer = nullptr, bool bCasters = false) noexcept
         {
             for (auto& M : Geom.getMeshes())
                 for (auto& L : Geom.getLODs().subspan(M.m_iLOD, M.m_nLODs))
@@ -390,8 +391,11 @@ namespace xgeom_static_editor::preview
                         push_const PushConstant{ Sub.m_iCluster };
                         for (auto& C : Geom.getClusters().subspan(Sub.m_iCluster, Sub.m_nCluster))
                         {
-                            CmdBuffer.setPushConstants(PushConstant);
-                            CmdBuffer.Draw(C.m_nIndices, C.m_iIndex, C.m_iVertex);
+                            if (!pRenderer || !(bCasters ? pRenderer->isClusterBoxed(0, PushConstant.m_ClusterIndex) : pRenderer->isClusterSkipped(0, PushConstant.m_ClusterIndex)))  // the preview's one draw
+                            {
+                                CmdBuffer.setPushConstants(PushConstant);
+                                CmdBuffer.Draw(C.m_nIndices, C.m_iIndex, C.m_iVertex);
+                            }
                             PushConstant.m_ClusterIndex++;
                         }
                     }
@@ -493,7 +497,7 @@ namespace xgeom_static_editor::preview
                 CmdBuffer.setDynamicUBO(m_WireUBO, 0);
                 CmdBuffer.setBuffer(Geom.IndexBuffer());           // (the overlay pass starts with the renderer's buffers bound)
                 CmdBuffer.setBuffer(Geom.VertexBuffer());
-                DrawClusters(CmdBuffer, Geom);
+                DrawClusters(CmdBuffer, Geom, &m_Renderer);
             }
 
             // The grid sits at the bottom of the geometry
@@ -523,7 +527,7 @@ namespace xgeom_static_editor::preview
 
                     CmdBuffer.setDynamicUBO(m_NormalUBO, 0);
                     CmdBuffer.setStreamingBuffers({ &Geom.IndexBuffer(), 3 });
-                    DrawClusters(CmdBuffer, Geom);
+                    DrawClusters(CmdBuffer, Geom, &m_Renderer);
                 }
             }
         }
