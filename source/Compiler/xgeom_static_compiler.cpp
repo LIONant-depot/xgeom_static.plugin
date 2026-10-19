@@ -1573,7 +1573,7 @@ void ConvertToCompilerMesh(void)
                 , .m_Warning            = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
                 , .m_Info               = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::INFO, std::move(Text)); }
                 };
-                Emitter.Emit(m_RawGeom.m_MaterialInstance);
+                Emitter.Emit(m_RawGeom.m_MaterialInstance, m_RawGeom.m_Facet);
                 displayProgressBar("Importing Materials", 1);
             }
 
