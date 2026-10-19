@@ -63,7 +63,7 @@ namespace xgeom_static
         xmath::fvec3        m_Scale         = xmath::fvec3::fromOne();
         xmath::fvec3        m_Rotation      = xmath::fvec3::fromZero();
         xmath::fvec3        m_Translation   = xmath::fvec3::fromZero();
-        bool                m_EditorLockScale = false;      // editor only: the Scale lock toggle (editing one axis scales all three)
+        bool                m_EditorLockScale = true;       // editor only: the Scale lock toggle (editing one axis scales all three)
         bool                m_bAutoUnits    = false;        // the units of the source to meters, before Scale: on for a new descriptor (SetupNew), off for one from before it (its Scale is the user's)
 
         XPROPERTY_DEF
