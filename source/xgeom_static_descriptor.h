@@ -204,6 +204,8 @@ namespace xgeom_static
         {
         }
 
+        std::string SuggestedName() const noexcept override { return NameOfFile(m_ImportAsset); }
+
         void SetupNew() noexcept override
         {
             m_PreTranslation.m_bAutoUnits = true;
