@@ -287,7 +287,7 @@ namespace xgeom_static_editor::preview
                 }
                 if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
-                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, pMat->m_Flags.m_bAlpha))) UseDefaultMaterial();
+                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, pMat->m_Flags.m_bAlpha, { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }))) UseDefaultMaterial();
             }
         }
 
