@@ -59,6 +59,7 @@ namespace xgeom_static_compiler
             int                             m_nWeights      { 0 };
             int                             m_nUVs          { 0 };
             bool                            m_bHasColor     { false };
+            bool                            m_bHasUV1       { false };      // a second UV set (the optional UV1 stream)
             bool                            m_bHasNormal    { false };
             bool                            m_bHasBTN       { false };
         };
@@ -166,6 +167,7 @@ namespace xgeom_static_compiler
                         if ( RawVert.m_nTangents ) SubMesh.m_bHasBTN    = true;
                         if ( RawVert.m_nNormals  ) SubMesh.m_bHasNormal = true;
                         if ( RawVert.m_nColors   ) SubMesh.m_bHasColor  = true;
+                        if ( RawVert.m_nUVs > 1  ) SubMesh.m_bHasUV1    = true;
 
                         if( SubMesh.m_Indices.size() && SubMesh.m_nUVs != 0 && RawVert.m_nUVs < SubMesh.m_nUVs )
                         {
@@ -266,6 +268,7 @@ void ConvertToCompilerMesh(void)
                 if (RawVert.m_nTangents) SubMesh.m_bHasBTN = true;
                 if (RawVert.m_nNormals) SubMesh.m_bHasNormal = true;
                 if (RawVert.m_nColors) SubMesh.m_bHasColor = true;
+                if (RawVert.m_nUVs > 1) SubMesh.m_bHasUV1 = true;
 
                 if (SubMesh.m_Indices.size() && SubMesh.m_nUVs != 0 && RawVert.m_nUVs < SubMesh.m_nUVs)
                 {
@@ -426,6 +429,8 @@ void ConvertToCompilerMesh(void)
         , std::vector<geom::vertex_extras>& AllExtrasVerts
         , const bool                        HasColor
         , std::vector<std::uint32_t>&       AllColors
+        , const bool                        HasUV1
+        , std::vector<std::array<float, 2>>& AllUV1
         , std::vector<geom::cluster_data>&  AllClusterData
         , std::vector<uint32_t>&            AllIndices
         , std::vector<TriCluster>&          Pending
@@ -522,6 +527,7 @@ void ConvertToCompilerMesh(void)
                 std::vector<geom::vertex>           original_static(new_vert_ids.size());
                 std::vector<geom::vertex_extras>    original_extras(new_vert_ids.size());
                 std::vector<std::uint32_t>          original_colors(new_vert_ids.size());
+                std::vector<std::array<float, 2>>   original_uv1(new_vert_ids.size());
                 for (uint32_t i = 0; i < new_vert_ids.size(); ++i)
                 {
                     const uint32_t  ov = new_vert_ids[i];
@@ -529,6 +535,9 @@ void ConvertToCompilerMesh(void)
 
                     // Color: RGBA8 as imported (sRGB), white for a submesh without colors when another one has them
                     original_colors[i] = HasColor ? v.m_Color.m_Value : 0xFFFFFFFFu;
+                    // UV1: the second UV set, UV0 for a submesh without one when another one has it (what the shader reads without the stream)
+                    const auto& uv1 = v.m_UVs[HasUV1 ? 1 : 0];
+                    original_uv1[i] = { uv1.m_X, uv1.m_Y };
                     const float     sign_val = BinormalSigns[ov];
                     const uint32_t  sign_bit = (sign_val < 0.0f ? 1u : 0u);
 
@@ -596,6 +605,9 @@ void ConvertToCompilerMesh(void)
                 std::vector<std::uint32_t> remapped_colors(new_vert_ids.size());
                 meshopt_remapVertexBuffer(remapped_colors.data(), original_colors.data(), new_vert_ids.size(), sizeof(std::uint32_t), fetch_remap.data());
 
+                std::vector<std::array<float, 2>> remapped_uv1(new_vert_ids.size());
+                meshopt_remapVertexBuffer(remapped_uv1.data(), original_uv1.data(), new_vert_ids.size(), sizeof(remapped_uv1[0]), fetch_remap.data());
+
                 // Remap indices
                 meshopt_remapIndexBuffer(local_indices.data(), local_indices.data(), local_indices.size(), fetch_remap.data());
 
@@ -604,6 +616,7 @@ void ConvertToCompilerMesh(void)
                 AllStaticVerts.insert(AllStaticVerts.end(), remapped_static.begin(), remapped_static.end());
                 AllExtrasVerts.insert(AllExtrasVerts.end(), remapped_extras.begin(), remapped_extras.end());
                 AllColors.insert(AllColors.end(), remapped_colors.begin(), remapped_colors.end());
+                AllUV1.insert(AllUV1.end(), remapped_uv1.begin(), remapped_uv1.end());
 
                 // Append indices to global
                 uint32_t cluster_index_start = static_cast<uint32_t>(AllIndices.size());
@@ -725,6 +738,8 @@ void ConvertToCompilerMesh(void)
         , std::vector<geom::vertex_extras>& AllExtrasVerts
         , const bool                        HasColor
         , std::vector<std::uint32_t>&       AllColors
+        , const bool                        HasUV1
+        , std::vector<std::array<float, 2>>& AllUV1
         , std::vector<geom::cluster_data>&  AllClusterData
         , std::vector<uint32_t>&            AllIndices
         )
@@ -735,7 +750,7 @@ void ConvertToCompilerMesh(void)
             {
                 const TriCluster c = std::move(Pending.back());
                 Pending.pop_back();
-                SplitCluster(InputVerts, InputIndices, c, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, HasColor, AllColors, AllClusterData, AllIndices, Pending);
+                SplitCluster(InputVerts, InputIndices, c, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, HasColor, AllColors, HasUV1, AllUV1, AllClusterData, AllIndices, Pending);
             }
         }
 
@@ -752,6 +767,7 @@ void ConvertToCompilerMesh(void)
             std::vector<geom::vertex>           OutAllStaticVerts;
             std::vector<geom::vertex_extras>    OutAllExtrasVerts;
             std::vector<std::uint32_t>          OutAllColors;
+            std::vector<std::array<float, 2>>   OutAllUV1;
             std::vector<geom::cluster_data>     OutClusterData;
             std::vector<uint32_t>               OutAllIndices;
             BBox3                               OutGlobalBBox;
@@ -843,7 +859,7 @@ void ConvertToCompilerMesh(void)
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, input_sm.m_bHasColor, OutAllColors, OutClusterData, OutAllIndices);
+                        MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, input_sm.m_bHasColor, OutAllColors, input_sm.m_bHasUV1, OutAllUV1, OutClusterData, OutAllIndices);
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
@@ -903,6 +919,9 @@ void ConvertToCompilerMesh(void)
             const bool              bHasColor       = std::ranges::any_of(compiler_meshes, [](const mesh& M) { return std::ranges::any_of(M.m_SubMesh, [](const auto& S) { return S.m_bHasColor; }); });
             const std::size_t       ColorSize       = bHasColor ? OutAllColors.size() * sizeof(std::uint32_t) : 0;
             assert(OutAllColors.size() == OutAllStaticVerts.size());
+            const bool              bHasUV1         = std::ranges::any_of(compiler_meshes, [](const mesh& M) { return std::ranges::any_of(M.m_SubMesh, [](const auto& S) { return S.m_bHasUV1; }); });
+            const std::size_t       UV1Size         = bHasUV1 ? OutAllUV1.size() * sizeof(OutAllUV1[0]) : 0;
+            assert(OutAllUV1.size() == OutAllStaticVerts.size());
 
             std::size_t             current_offset  = 0;
 
@@ -911,7 +930,8 @@ void ConvertToCompilerMesh(void)
             result.m_IndicesOffset          = current_offset; current_offset = align(current_offset + IndicesSize,      vulkan_align);
             result.m_ClusterDataOffset      = current_offset; current_offset = align(current_offset + ClusterDataSize,  vulkan_align);
             result.m_VertexColorOffset      = current_offset; current_offset = align(current_offset + ColorSize,        vulkan_align);
-            result.m_OptionalStreams        = bHasColor ? geom::stream_color0_v : std::uint8_t{0};
+            result.m_UV1Offset              = current_offset; current_offset = align(current_offset + UV1Size,          vulkan_align);
+            result.m_OptionalStreams        = std::uint8_t((bHasColor ? geom::stream_color0_v : 0) | (bHasUV1 ? geom::stream_uv1_v : 0));
             result.m_DataSize               = current_offset;
             result.m_pData                  = new char[result.m_DataSize];
 
@@ -920,6 +940,7 @@ void ConvertToCompilerMesh(void)
             std::memcpy(result.m_pData + result.m_VertexExtrasOffset,   OutAllExtrasVerts.data(), ExtrasSize);
             std::memcpy(result.m_pData + result.m_ClusterDataOffset,    OutClusterData.data(),    ClusterDataSize);
             std::memcpy(result.m_pData + result.m_VertexColorOffset,    OutAllColors.data(),      ColorSize);
+            std::memcpy(result.m_pData + result.m_UV1Offset,            OutAllUV1.data(),         UV1Size);
 
             // Copy the indices
             auto pIndex = reinterpret_cast<std::uint16_t*>(result.m_pData + result.m_IndicesOffset);
