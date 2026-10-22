@@ -15,6 +15,7 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
+#include "plugins/xmaterial.plugin/source/xmaterial_xlionrender.h"
 #include "plugins/xgeom_static.plugin/source/Editor/xgeom_static_editor_inspectors.h"
 #include "source/Tools/Editor/xeditor_scale_reference.h"
 
@@ -288,7 +289,7 @@ namespace xgeom_static_editor::preview
                 }
                 if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
-                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, pMat->m_Flags.m_bAlpha, { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }))) UseDefaultMaterial();
+                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }))) UseDefaultMaterial();
             }
         }
 
