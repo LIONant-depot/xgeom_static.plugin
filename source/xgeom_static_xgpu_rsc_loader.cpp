@@ -63,6 +63,7 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
     ||(p = UserData.m_Device.Create(pXGPUGeom->VertexExtrasBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX,  .m_EntryByteSize = (int)sizeof(xgeom_static::geom::vertex_extras),     .m_EntryCount = (int)pXGPUGeom->getVertexExtras().size(), .m_pData = pXGPUGeom->getVertexExtras().data()}))
     ||(p = UserData.m_Device.Create(pXGPUGeom->IndexBuffer(),        xgpu::buffer::setup{.m_Type = xgpu::buffer::type::INDEX,   .m_EntryByteSize = (int)sizeof(std::uint16_t),                         .m_EntryCount = (int)pXGPUGeom->getIndices().size(),      .m_pData = pXGPUGeom->getIndices().data()}))
     ||(p = UserData.m_Device.Create(pXGPUGeom->ClusterBuffer(),      xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(xgeom_static::geom::cluster_data),      .m_EntryCount = (int)pXGPUGeom->getClusterData().size(),  .m_pData = pXGPUGeom->getClusterData().data() }))
+    ||(pXGPUGeom->getVertexColors().size() && (p = UserData.m_Device.Create(pXGPUGeom->ColorBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)pXGPUGeom->getVertexColors().size(), .m_pData = pXGPUGeom->getVertexColors().data()})))
     ;
     assert(p == nullptr);
 
@@ -95,7 +96,7 @@ void xresource::loader< xrsc::geom_static_type_guid_v >::Destroy(xresource::mgr&
     // Release all the buffers. They live in the geom's raw runtime memory, which is freed below without running destructors, and
     // xgpu::buffer has no move: Destroy(std::move(B)) queued a copy and left B's reference behind, so all four leaked. Taking the
     // handle out releases it through the device's deferred destroy.
-    for (auto* pBuffer : { &Data.VertexBuffer(), &Data.VertexExtrasBuffer(), &Data.IndexBuffer(), &Data.ClusterBuffer() })
+    for (auto* pBuffer : { &Data.VertexBuffer(), &Data.VertexExtrasBuffer(), &Data.IndexBuffer(), &Data.ClusterBuffer(), &Data.ColorBuffer() })
     {
         xgpu::buffer Released;
         Released.m_Private.swap(pBuffer->m_Private);
