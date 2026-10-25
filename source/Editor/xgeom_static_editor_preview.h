@@ -411,6 +411,11 @@ namespace xgeom_static_editor::preview
         void Render(xgpu::window& Window, geom& Geom, float ViewW, float ViewH) noexcept
         {
             if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f || !m_Mesh.isValid()) return;
+            // Measurement only (XLION_FRAME_TIMES, as the host's FRAMETIMES): the preview's parts, the mean of 120 frames
+            static const bool s_bTimes = std::getenv("XLION_FRAME_TIMES") != nullptr;
+            using clk = std::chrono::steady_clock;
+            const auto TP0 = clk::now();
+            const auto PMs = [](clk::time_point a, clk::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
             // The geometry compiled again (getResource moved the caller's reference and the old data is gone - the mesh was made from its
             // buffers), or a material did
             if (&Geom != m_pMeshGeom || MaterialsStale()) RebuildMaterials(Geom);
@@ -420,7 +425,9 @@ namespace xgeom_static_editor::preview
             if (m_RenderView.m_Width != W || m_RenderView.m_Height != H)
                 if (!Ok(m_Renderer.CreateView(m_RenderView, { .m_Width = W, .m_Height = H }))) return;
 
+            const auto TPs = clk::now();
             RenderShadow(Window, Geom, ViewW, ViewH);
+            if (s_bTimes) { static double Sh = 0, Pre = 0; static int ns = 0; Sh += PMs(TPs, clk::now()); Pre += PMs(TP0, TPs); if (++ns == 120) { std::printf("PREVIEWPRE materials+view %.2f, RenderShadow %.2f ms\n", Pre / ns, Sh / ns); std::fflush(stdout); Sh = Pre = 0; ns = 0; } }
             S.m_Camera.m_Subject  = Geom.m_BBox.getCenter();      // the FOV of the Fly camera keeps the geometry the same size
             S.m_Camera.m_bSubject = true;
             S.m_Camera.m_SubjectRadius = Geom.m_BBox.getRadius();
@@ -452,7 +459,18 @@ namespace xgeom_static_editor::preview
                     m_bGIReady = true;
                     xlionrender::gi::surfel_mesh Surfels;
                     xlionrender::gi::FromXGeomStatic(Surfels, Geom);
-                    if (xlionrender::gi::SurfelsFromXGeomStatic(Surfels, Geom) && Surfels.m_Levels[0].size() < 0xFFFF) (void)m_Renderer.SetMeshGI(m_Mesh, std::move(Surfels));
+                    if (!Geom.getGISections().empty())        // over one GI mesh's cap: its sections (xLIONRender gi_chunks_plan.md)
+                    {
+                        std::vector<xlionrender::gi::loaded_section> L;
+                        std::vector<std::uint16_t> ClusterSection; std::vector<int> ClusterVertexDelta;
+                        if (xlionrender::gi::SectionsFromXGeomStatic(Surfels, Geom, L, ClusterSection, ClusterVertexDelta))
+                        {
+                            std::vector<xlionrender::instance::gi_section_in> In;
+                            for (auto& Sec : L) In.push_back({ std::move(Sec.m_Surfels), {}, Sec.m_nOwned, std::move(Sec.m_Ghosts) });
+                            (void)m_Renderer.SetMeshGISections(m_Mesh, std::move(In), std::move(ClusterSection), std::move(ClusterVertexDelta));
+                        }
+                    }
+                    else if (xlionrender::gi::SurfelsFromXGeomStatic(Surfels, Geom) && Surfels.m_Levels[0].size() < 0xFFFF) (void)m_Renderer.SetMeshGI(m_Mesh, std::move(Surfels));
                 }
                 using dbg = xlionrender::gi_debug;
                 Scene.m_GI = { .m_bEnable = true, .m_RayBudget = 1 << 16
@@ -477,8 +495,22 @@ namespace xgeom_static_editor::preview
             if (const xgpu::texture* pEnv = m_EnvRef.empty() ? nullptr : xresource::g_Mgr.getResource(m_EnvRef); pEnv && pEnv->isCubemap())
                 Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
+            const auto TP1 = clk::now();
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
             if (pHost && Scene.m_GI.m_bEnable) pHost->m_GIAllowance.Used(float(m_Renderer.getGIStats().m_UpdateGIMs), false);
+            if (s_bTimes)
+            {
+                static double Sum[6] = {}; static int n = 0;
+                const auto& C = m_Renderer.getCPUTimes();
+                const double V[6] = { PMs(TP0, TP1), C.m_InstancesMs, C.m_ShadowsMs, C.m_LightCellsMs, C.m_RenderMs, PMs(TP0, clk::now()) };
+                for (int k = 0; k < 6; ++k) Sum[k] += V[k];
+                if (++n == 120)
+                {
+                    std::printf("PREVIEWTIMES before Render %.2f; Render: up to the shadows (instances, GI, captures) %.2f, shadows %.2f, light cells %.2f, all %.2f; preview all %.2f ms\n",
+                                Sum[0] / n, Sum[1] / n, Sum[2] / n, Sum[3] / n, Sum[4] / n, Sum[5] / n);
+                    std::fflush(stdout); n = 0; for (auto& v : Sum) v = 0;
+                }
+            }
         }
 
         // The wire frame, the grid and the tangent/binormal/normal lines, in display colors over the tone-mapped image

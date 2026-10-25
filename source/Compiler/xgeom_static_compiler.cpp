@@ -1,4 +1,12 @@
 #include "xgeom_static_compiler.h"
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
+#endif
+#include <chrono>
 
 #include <dependencies/xcontainer/source/xcontainer_lockless_pool.h>
 
@@ -14,6 +22,7 @@
 #include "../xgeom_static_details.h"
 
 #include "dependencies/xLIONRender/src/features/gi/xlionrender_surfel_gi.h"
+#include "dependencies/xLIONRender/src/features/gi/xlionrender_surfel_gi_chunks.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "plugins/xmaterial_instance.plugin/source/Compiler/xmaterial_instance_import_compiler.h"
@@ -859,7 +868,24 @@ void ConvertToCompilerMesh(void)
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, input_sm.m_bHasColor, OutAllColors, input_sm.m_bHasUV1, OutAllUV1, OutClusterData, OutAllIndices);
+                        if (m_nGIRegions > 1)      // GI sections: no cluster crosses a region (a section is whole clusters: BakeGISections)
+                        {
+                            std::vector<TriCluster> ByRegion(static_cast<std::size_t>(m_nGIRegions));
+                            for (const std::uint32_t t : initial.tri_ids)
+                            {
+                                const auto& A = input_sm.m_Vertex[lod_indices[3 * t]].m_Position; const auto& B = input_sm.m_Vertex[lod_indices[3 * t + 1]].m_Position; const auto& C = input_sm.m_Vertex[lod_indices[3 * t + 2]].m_Position;
+                                ByRegion[std::size_t(GIRegionOf((A + B + C) * (1.0f / 3.0f)))].tri_ids.push_back(t);
+                            }
+                            for (std::size_t g = 0; g < ByRegion.size(); ++g)
+                            {
+                                if (ByRegion[g].tri_ids.empty()) continue;
+                                const std::size_t Before = OutClusters.size();
+                                MakeClusters(input_sm.m_Vertex, lod_indices, ByRegion[g], 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, input_sm.m_bHasColor, OutAllColors, input_sm.m_bHasUV1, OutAllUV1, OutClusterData, OutAllIndices);
+                                m_ClusterRegion.resize(OutClusters.size(), -1);
+                                for (std::size_t c = Before; c < OutClusters.size(); ++c) m_ClusterRegion[c] = int(g);
+                            }
+                        }
+                        else MakeClusters(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, input_sm.m_bHasColor, OutAllColors, input_sm.m_bHasUV1, OutAllUV1, OutClusterData, OutAllIndices);
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
@@ -1172,6 +1198,7 @@ void ConvertToCompilerMesh(void)
 
         // The most surfels a mesh can have: they are indexed by 16 bits, 0xFFFF is "no surfel" (m_pGIVertSurfel)
         static constexpr std::size_t max_gi_surfels_v = 0xFFFE;
+        static constexpr std::size_t section_owned_target_v = 48000;    // a GI section's owned surfels to aim at (its ghosts after: under the cap)
 
         // A suggested SurfelSize, rounded UP to 2 significant digits (0.0125 -> 0.013): with a fixed 2 decimals a small one read as the size that did not fit
         static float SuggestSurfelSize(float S) noexcept { const float P = std::pow(10.0f, std::floor(std::log10(S)) - 1); return std::ceil(S / P - 1e-3f) * P; }
@@ -1182,6 +1209,324 @@ void ConvertToCompilerMesh(void)
         void PrecheckGI()
         {
             if (m_Descriptor.m_GI.m_Mode == xgeom_static::gi_mode::OFF) return;
+            if (const char* pU = std::getenv("XLION_GI_UNCAPPED"))     // measurement (GI chunks plan): the uncapped bake's memory, stage by stage
+            {
+                float R = 1; int Stop = 99;
+                int Target = 48000;
+                (void)std::sscanf(pU, "%f,%d,%d", &R, &Stop, &Target);
+                using clock = std::chrono::steady_clock;
+                const auto T0 = clock::now();
+                FILE* pF = std::fopen("gi_autopsy.txt", "a");
+                const auto Stage = [&](const char* pName, std::size_t Count)
+                {
+                    PROCESS_MEMORY_COUNTERS_EX M{}; M.cb = sizeof(M);
+                    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&M), sizeof(M));
+                    const auto Line = std::format("AUTOPSY {:7.1f} s  {:<28} count {:>12}  working set {:7.0f} MB  peak {:7.0f} MB  committed {:7.0f} MB\n",
+                        std::chrono::duration<double>(clock::now() - T0).count(), pName, Count, M.WorkingSetSize / 1048576.0, M.PeakWorkingSetSize / 1048576.0, M.PrivateUsage / 1048576.0);
+                    LogMessage(xresource_pipeline::msg_type::INFO, Line);
+                    if (pF) { std::fputs(Line.c_str(), pF); std::fflush(pF); }
+                };
+                xlionrender::gi::surfel_mesh U;
+                for (const auto& V : m_RawGeom.m_Vertex) { U.m_Pos.push_back(V.m_Position); U.m_Nrm.push_back(V.m_BTN[0].m_Normal); }
+                for (const auto& F : m_RawGeom.m_Facet) U.m_Tris.push_back({ int(F.m_iVertex[0]), int(F.m_iVertex[1]), int(F.m_iVertex[2]) });
+                U.m_bLeakProtection = m_Descriptor.m_GI.m_bLeakProtection;
+                Stage("baseline (import + raw copy)", U.m_Tris.size());
+                // the candidate rule, counted without allocating: per triangle max(1, area 4/R^2, longest edge / (R/2)); how many come from the floor of 1
+                {
+                    std::size_t nCand = 0, nFloor = 0, nTiny = 0; double Area = 0;
+                    const float PerArea = 4.0f / (R * R);
+                    for (const auto& T : U.m_Tris)
+                    {
+                        const auto& A = U.m_Pos[T[0]]; const auto& B = U.m_Pos[T[1]]; const auto& C = U.m_Pos[T[2]];
+                        const float a = 0.5f * (B - A).Cross(C - A).Length(), Long = std::max({ (B - A).Length(), (C - B).Length(), (A - C).Length() });
+                        const int n = std::min(1 << 16, std::max({ 1, int(std::ceil(a * PerArea)), int(std::ceil(Long / (0.5f * R))) }));
+                        nCand += std::size_t(n); Area += a;
+                        if (a * PerArea < 0.1f && Long < 0.1f * R) { ++nTiny; nFloor += 1; }
+                    }
+                    Stage("candidates by the rule", nCand);
+                    Stage("  of which the floor of 1 on tiny triangles", nFloor);
+                    Stage("  R-disks the area asks for", std::size_t(Area / (3.14159265 * R * R)));
+                }
+                if (Stop >= 1) { std::vector<xlionrender::gi::v3> CP, CN; U.Candidates(R, CP, CN, nullptr); Stage("candidates materialized", CP.size()); }
+                if (Stop >= 2) { const std::size_t n = U.CountSurfels(R, ~std::size_t(0), false); Stage("Poisson count, no rays", n); }
+                if (Stop >= 3) { U.BuildRays(); Stage("BVH built (Tri4 leaves)", U.m_Tri4.size()); }
+                if (Stop >= 4)
+                {
+                    U.Bake(R, 3 * R, {}, ~std::size_t(0)); Stage("bake: fine surfels", U.m_Levels[0].size()); Stage("bake: parents", U.m_Levels[1].size());
+                    const char* pName[] = { "candidates", "fine darts", "materials", "vertex surfels", "parents", "neighbours" };
+                    for (int k = 0; k < 6; ++k) Stage(std::format("  bake ms: {}", pName[k]).c_str(), std::size_t(U.m_BakeMs[std::size_t(k)]));
+                }
+                if (Stop >= 5 && Stop != 8 && Stop != 9) { U.BuildReadGrid(); Stage("read grid: list words", U.m_ReadList.size()); Stage("read grid: table entries", U.m_ReadTable.size()); }
+                if (Stop == 6 || Stop == 67)      // the bounded lists' light against the unbounded (job 1 of the GI handover)
+                {
+                    using namespace xlionrender::gi;
+                    surfel_mesh V = U; V.m_ReadListCap = ~std::size_t(0); V.BuildReadGrid();
+                    Stage("unbounded read grid: list words", V.m_ReadList.size());
+                    lights Lt; Lt.m_SunDirection = v3{ 0.3f, -1, 0.4f }.NormalizeCopy(); Lt.m_SunColor = { 3, 3, 3 }; Lt.m_Sky = { 0.2f, 0.2f, 0.25f };
+                    world Wa, Wb, Wc;
+                    const int Ia = Wa.Add(V, xmath::fmat4::fromIdentity(), { 0.6f, 0.6f, 0.6f }), Ib = Wb.Add(V, xmath::fmat4::fromIdentity(), { 0.6f, 0.6f, 0.6f });
+                    const int Ic = Wc.Add(U, xmath::fmat4::fromIdentity(), { 0.6f, 0.6f, 0.6f });
+                    const auto Run = [&](world& W, unsigned Seed)
+                    {
+                        W.m_Setup.m_RaysPerSurfel = 32; W.m_Setup.m_MinBlend = 1;
+                        for (int u = 0; u < 8; ++u) W.Update(Lt, { 0, 2, 0 }, 1 << 30, Seed + unsigned(u));
+                        W.m_Setup.m_MinBlend = 0;
+                        for (int u = 0; u < 60; ++u) W.Update(Lt, { 0, 2, 0 }, 1 << 30, Seed + 100 + unsigned(u));
+                    };
+                    Run(Wa, 1000); Stage("world a converged", 0); Run(Wb, 5000); Run(Wc, 1000); Stage("worlds b, c converged", 0);
+                    const auto Lum = [](const v3& e) { return 0.2126 * e.m_X + 0.7152 * e.m_Y + 0.0722 * e.m_Z; };
+                    std::vector<double> Dab, Dac; double Top = 1e-9;
+                    for (std::size_t t = 0; t < U.m_Tris.size(); t += 7)
+                    {
+                        const auto& T = U.m_Tris[t];
+                        const v3 Pp = (U.m_Pos[T[0]] + U.m_Pos[T[1]] + U.m_Pos[T[2]]) * (1.0f / 3.0f);
+                        const v3 F = (U.m_Pos[T[1]] - U.m_Pos[T[0]]).Cross(U.m_Pos[T[2]] - U.m_Pos[T[0]]);
+                        if (F.Length() < 1e-12f) continue;
+                        const v3 Nn = F.NormalizeCopy();
+                        const auto qa = Wa.ReadPoint(Ia, Pp, Nn), qb = Wb.ReadPoint(Ib, Pp, Nn), qc = Wc.ReadPoint(Ic, Pp, Nn);
+                        if (!qa.m_bSupported || !qb.m_bSupported || !qc.m_bSupported) continue;
+                        Top = std::max(Top, Lum(qa.m_E));
+                        Dab.push_back(std::abs(Lum(qa.m_E) - Lum(qb.m_E))); Dac.push_back(std::abs(Lum(qa.m_E) - Lum(qc.m_E)));
+                    }
+                    const auto Pct = [&](std::vector<double> X, double p) { std::sort(X.begin(), X.end()); return X.empty() ? 0.0 : 100 * X[std::size_t(p * double(X.size() - 1))] / Top; };
+                    const auto Line = std::format("LISTCAP at {} points (of the brightest): bounded off unbounded {:.2f}% median, {:.2f}% 95th, {:.2f}% 99th; two unbounded worlds {:.2f}%, {:.2f}%, {:.2f}%\n",
+                        Dac.size(), Pct(Dac, 0.5), Pct(Dac, 0.95), Pct(Dac, 0.99), Pct(Dab, 0.5), Pct(Dab, 0.95), Pct(Dab, 0.99));
+                    LogMessage(xresource_pipeline::msg_type::INFO, Line);
+                    if (pF) { std::fputs(Line.c_str(), pF); std::fflush(pF); }
+                }
+                if (Stop == 7)      // the memory ledger by category (job 3 of the GI handover)
+                {
+                    using namespace xlionrender::gi;
+                    const auto B = [](const auto& V) { return double(V.capacity() * sizeof(V[0])); };
+                    const double nF = double(std::max<std::size_t>(U.m_Levels[0].size(), 1));
+                    double Nb = 0; for (const auto& N : U.m_Neighbors) Nb += B(N.m_First) + B(N.m_Index) + B(N.m_Weight);
+                    const double Tri  = B(U.m_Pos) + B(U.m_Nrm) + B(U.m_Tris) + B(U.m_UV) + B(U.m_TriMaterial);
+                    const double Bvh  = B(U.m_Bvh.m_Nodes) + B(U.m_Bvh.m_Leaves) + B(U.m_Tri4);
+                    const double Surf = B(U.m_Levels[0]) + B(U.m_Levels[1]) + B(U.m_ParentOf) + B(U.m_SurfelMaterial);
+                    const double Vert = B(U.m_VertSurfels), Orig = B(U.m_OriginFirst) + B(U.m_OriginVert);
+                    const double Read = B(U.m_ReadTable) + B(U.m_ReadList);
+                    std::string Line = std::format("LEDGER {} fine surfels, {} parents, {} triangles. Shared per mesh, MB (B a fine surfel):\n", U.m_Levels[0].size(), U.m_Levels[1].size(), U.m_Tris.size());
+                    for (const auto& [pN, v] : std::initializer_list<std::pair<const char*, double>>{ { "triangles (CPU twin)", Tri }, { "BVH + Tri4", Bvh }, { "surfels + parents", Surf },
+                        { "vertex surfels", Vert }, { "neighbour lists", Nb }, { "ray origins", Orig }, { "read grid", Read } })
+                        Line += std::format("LEDGER   {:<22} {:8.2f} MB  ({:6.1f} B)\n", pN, v / 1048576.0, v / nF);
+                    const double GISum = Surf + Vert + Nb + Orig + Read;
+                    Line += std::format("LEDGER   GI shared (without triangles, BVH) {:8.2f} MB  ({:6.1f} B)\n", GISum / 1048576.0, GISum / nF);
+                    for (const bool bOwned : { false, true })       // per instance, the CPU world's light state (its stats, level 0)
+                    {
+                        world W; W.m_Setup.m_bGPUOwned = W.m_Setup.m_bGPUTrace = W.m_Setup.m_bGPUShown = bOwned;     // (as the renderer: all three)
+                        (void)W.Add(U, xmath::fmat4::fromIdentity(), { 0.6f, 0.6f, 0.6f });
+                        lights Lt;
+                        const auto St = W.Update(Lt, { 0, 2, 0 }, 0, 1);
+                        Line += std::format("LEDGER   per instance, the CPU's light state, {}: {:8.2f} MB ({:6.1f} B), the filter {:6.1f} B, links {:6.1f} B\n", bOwned ? "GPU-owned " : "CPU-solved",
+                            double(St.m_LightBytes) / 1048576.0, double(St.m_LightBytes) / nF, double(St.m_FilterBytes) / nF, double(St.m_LinkBytes) / nF);
+                    }
+                    LogMessage(xresource_pipeline::msg_type::INFO, Line);
+                    if (pF) { std::fputs(Line.c_str(), pF); std::fflush(pF); }
+                }
+                if (Stop == 8)      // surfel LOD: coarser levels from the parents, by the bake's rule (GI working set: far field option A)
+                {
+                    using namespace xlionrender::gi;
+                    std::vector<surfel> Lv = U.m_Levels[1];
+                    float Rl = 3 * R;
+                    for (int l = 0; l < 2; ++l)
+                    {
+                        const float Rn = 3 * Rl;
+                        std::vector<int> Order(Lv.size());
+                        for (std::size_t i = 0; i < Order.size(); ++i) Order[i] = int(i);
+                        rng Shuffle(0x5EEDu);
+                        for (std::size_t i = Order.size(); i > 1; --i) std::swap(Order[i - 1], Order[std::size_t(Shuffle.Next() * float(i)) % i]);
+                        surfel_grid G{ Rn, {} };
+                        std::vector<surfel> Out;
+                        for (const int i : Order)
+                        {
+                            const v3 Pi = Lv[std::size_t(i)].m_Center, Ni = Lv[std::size_t(i)].m_Normal;
+                            bool bTaken = false;
+                            G.Near(Pi, 1, [&](int k) { const auto& S = Out[std::size_t(k)]; bTaken = bTaken || ((Pi - S.m_Center).Length() < Rn && S.m_Normal.Dot(Ni) > 0.8f
+                                                                     && std::abs((S.m_Center - Pi).Dot(Ni)) < 0.1f * Rn && U.Sees(Pi, Ni, S)); });
+                            if (bTaken) continue;
+                            G.Add(Pi, int(Out.size()));
+                            Out.push_back({ Pi, Ni, Rn });
+                        }
+                        Stage(std::format("LOD level {} ({:.0f} m): surfels, x{:.2f} fewer", l + 2, Rn, double(Lv.size()) / double(std::max<std::size_t>(Out.size(), 1))).c_str(), Out.size());
+                        Lv = std::move(Out); Rl = Rn;
+                    }
+                }
+                if (Stop == 9)      // sections: the bake partitioned into GI chunks (gi_chunks_plan.md)
+                {
+                    using namespace xlionrender::gi;
+                    std::vector<int> TriCluster(U.m_Tris.size());
+                    std::unordered_map<std::uint64_t, int> CellId;
+                    for (std::size_t t = 0; t < U.m_Tris.size(); ++t)
+                    {
+                        const auto& T = U.m_Tris[t];
+                        const v3 C = (U.m_Pos[T[0]] + U.m_Pos[T[1]] + U.m_Pos[T[2]]) * (1.0f / 3.0f);
+                        const std::uint64_t K = surfel_grid::Key(int(std::floor(C.m_X / 4.0f)), int(std::floor(C.m_Y / 4.0f)), int(std::floor(C.m_Z / 4.0f)));
+                        TriCluster[t] = CellId.try_emplace(K, int(CellId.size())).first->second;
+                    }
+                    Stage("chunks: proxy clusters (4 m cells)", CellId.size());
+                    chunked_mesh Ch; chunk_report Rep;
+                    const bool bFits = PartitionChunks(U, TriCluster, int(CellId.size()), std::size_t(Target), Ch, &Rep);
+                    std::size_t Words = 0; for (const auto& C : Ch.m_Chunks) Words += C.m_ReadList.size();
+                    const auto Line = std::format("CHUNKS target {}: {} chunks ({} split again), owned {}..{}, ghosts {} ({:.0f}% of the owned; at most {} a chunk), local at most {} (fits {}), "
+                                                  "read lists {} words in all; partition {:.0f} ms, chunks built {:.0f} ms\n",
+                        Target, Rep.m_nChunks, Rep.m_nSplitsAgain, Rep.m_OwnedMin, Rep.m_OwnedMax, Rep.m_GhostsTotal, 100.0 * double(Rep.m_GhostsTotal) / double(std::max<std::size_t>(U.m_Levels[0].size(), 1)),
+                        Rep.m_GhostsMax, Rep.m_LocalMax, bFits ? "yes" : "NO", Words, Rep.m_PartitionMs, Rep.m_BuildMs);
+                    LogMessage(xresource_pipeline::msg_type::INFO, Line);
+                    if (pF) { std::fputs(Line.c_str(), pF); std::fflush(pF); }
+                    Stage("chunks: built", Ch.m_Chunks.size());
+                    {
+                        world Ww, Wc;
+                        (void)Ww.Add(U, xmath::fmat4::fromIdentity(), { 0.5f, 0.5f, 0.5f });
+                        for (const auto& C : Ch.m_Chunks) (void)Wc.Add(C, xmath::fmat4::fromIdentity(), { 0.5f, 0.5f, 0.5f });
+                        lights Lt;
+                        (void)Ww.Update(Lt, { 0, 2, 0 }, 0, 1); (void)Wc.Update(Lt, { 0, 2, 0 }, 0, 1);      // (their TLAS)
+                        const std::size_t nRays = 1 << 21;
+                        std::vector<std::pair<v3, v3>> Rays(nRays);
+                        rng Rr(77);
+                        const auto& L0 = U.m_Levels[0];
+                        for (auto& [O, D] : Rays) { const auto& S = L0[std::min<std::size_t>(std::size_t(Rr.Next() * float(L0.size())), L0.size() - 1)]; O = S.m_Center + S.m_Normal * 1e-3f; D = world::CosineDir(S.m_Normal, Rr); }
+                        std::vector<float> Tw(nRays), Tc(nRays);
+                        const auto Time = [&](const world& W, std::vector<float>& T)
+                        {
+                            const auto T0 = std::chrono::steady_clock::now();
+                            ParallelFor(int(nRays / 1024), [&](int b) { for (std::size_t k = std::size_t(b) * 1024; k < std::size_t(b + 1) * 1024; ++k) { const auto H = W.Cast(Rays[k].first, Rays[k].second); T[k] = H.m_Inst < 0 ? -1.0f : H.m_T; } });
+                            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - T0).count();
+                        };
+                        const double Mw = Time(Ww, Tw), Mc = Time(Wc, Tc);
+                        std::size_t nDiff = 0; for (std::size_t k = 0; k < nRays; ++k) nDiff += std::abs(Tw[k] - Tc[k]) > 1e-3f;
+                        const auto L3 = std::format("CHUNKS overlap: {} rays, whole mesh {:.0f} ms ({:.0f} rays/ms), {} sections {:.0f} ms ({:.0f} rays/ms, x{:.2f}); hits that differ {}\n",
+                            nRays, Mw, double(nRays) / Mw, Ch.m_Chunks.size(), Mc, double(nRays) / Mc, Mc / Mw, nDiff);
+                        LogMessage(xresource_pipeline::msg_type::INFO, L3);
+                        if (pF) { std::fputs(L3.c_str(), pF); std::fflush(pF); }
+                    }
+                    {
+                        std::size_t nGhost = 0, nUsed = 0, nUsed2 = 0;
+                        for (std::size_t c = 0; c < Ch.m_Chunks.size(); ++c)
+                        {
+                            const auto& C = Ch.m_Chunks[c];
+                            const std::uint32_t nOwned = Ch.m_nOwned[c], nAll = std::uint32_t(C.m_Levels[0].size());
+                            std::vector<char> Used(nAll, 0);
+                            for (const auto& E : C.m_ReadTable)
+                            {
+                                if (E[1] == 0xFFFFFFFFu) continue;
+                                for (std::uint32_t p = 0; p < E[3]; ++p)
+                                {
+                                    const std::uint32_t First = C.m_ReadList[E[2] + 4 * p + 2], n = C.m_ReadList[E[2] + 4 * p + 3] & 0xFFFFu;
+                                    for (std::uint32_t k = 0; k < n; ++k) Used[C.m_ReadList[First + k] & 0xFFFFu] = 1;
+                                }
+                            }
+                            for (const auto& V : C.m_VertSurfels) for (const int sv : V) if (sv >= 0) Used[std::size_t(sv)] = 1;
+                            const auto& Nb = C.m_Neighbors[0];
+                            if (Nb.m_First.size() == nAll + 1) for (std::uint32_t o = 0; o < nOwned; ++o) for (std::uint32_t k = Nb.m_First[o]; k < Nb.m_First[o + 1]; ++k) Used[Nb.m_Index[k]] = 1;
+                            std::vector<char> Used2 = Used;      // one more filter pass: the neighbours of the used ghosts
+                            if (Nb.m_First.size() == nAll + 1) for (std::uint32_t g = nOwned; g < nAll; ++g) if (Used[g]) for (std::uint32_t k = Nb.m_First[g]; k < Nb.m_First[g + 1]; ++k) Used2[Nb.m_Index[k]] = 1;
+                            for (std::uint32_t g = nOwned; g < nAll; ++g) { ++nGhost; nUsed += Used[g]; nUsed2 += Used2[g]; }
+                        }
+                        const auto L2 = std::format("CHUNKS ghosts named by the reads, vertex surfels and owned neighbours: {} of {} ({:.0f}% of the owned); with one more filter pass {} ({:.0f}%)\n",
+                            nUsed, nGhost, 100.0 * double(nUsed) / double(std::max<std::size_t>(U.m_Levels[0].size(), 1)), nUsed2, 100.0 * double(nUsed2) / double(std::max<std::size_t>(U.m_Levels[0].size(), 1)));
+                        LogMessage(xresource_pipeline::msg_type::INFO, L2);
+                        if (pF) { std::fputs(L2.c_str(), pF); std::fflush(pF); }
+                    }
+                }
+                if (Stop == 10)     // the compression census
+                {
+                    using namespace xlionrender::gi;
+                    std::string Out;
+                    const auto Add = [&](std::string L) { Out += "CENSUS " + L + "\n"; };
+                    const auto Arr = [&](const char* pN, const auto& V)
+                    {
+                        Add(std::format("{:<26} count {:>10}  capacity {:>10}  element {:>3} B  bytes {:8.2f} MB  (unused capacity {:5.1f}%)", pN, V.size(), V.capacity(), sizeof(V[0]),
+                            double(V.capacity() * sizeof(V[0])) / 1048576.0, V.capacity() ? 100.0 * double(V.capacity() - V.size()) / double(V.capacity()) : 0.0));
+                    };
+                    Arr("fine surfels", U.m_Levels[0]); Arr("parents", U.m_Levels[1]); Arr("parent of", U.m_ParentOf); Arr("surfel materials", U.m_SurfelMaterial);
+                    Arr("vertex surfels", U.m_VertSurfels); Arr("origin first", U.m_OriginFirst); Arr("origin vertices", U.m_OriginVert);
+                    for (int Lv = 0; Lv < 2; ++Lv) { Arr(Lv ? "neighbours L1 first" : "neighbours L0 first", U.m_Neighbors[Lv].m_First); Arr(Lv ? "neighbours L1 index" : "neighbours L0 index", U.m_Neighbors[Lv].m_Index); Arr(Lv ? "neighbours L1 weight" : "neighbours L0 weight", U.m_Neighbors[Lv].m_Weight); }
+                    Arr("read table", U.m_ReadTable); Arr("read list words", U.m_ReadList);
+                    const double nF = double(U.m_Levels[0].size()), nV = double(U.m_Pos.size());
+                    Add(std::format("{} fine surfels, {} parents, {} vertices ({:.2f} a fine surfel), {} triangles", U.m_Levels[0].size(), U.m_Levels[1].size(), U.m_Pos.size(), nV / nF, U.m_Tris.size()));
+                    // origins
+                    {
+                        std::array<std::size_t, 9> H{};
+                        for (std::size_t k = 0; k + 1 < U.m_OriginFirst.size(); ++k) ++H[std::min<std::size_t>(U.m_OriginFirst[k + 1] - U.m_OriginFirst[k], 8)];
+                        std::string L = "origins per surfel (incl. its center):";
+                        for (int k = 0; k < 9; ++k) L += std::format(" {}:{:.1f}%", k, 100.0 * double(H[std::size_t(k)]) / nF);
+                        Add(L);
+                    }
+                    // vertex bindings
+                    {
+                        std::unordered_set<std::uint64_t> Tup;
+                        std::size_t nNone = 0;
+                        const auto Pack = [](const std::array<int, 4>& T) { std::uint64_t h = 1469598103934665603ull; for (const int x : T) { h ^= std::uint64_t(std::uint32_t(x)); h *= 1099511628211ull; } return h; };
+                        std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>> PerCell;
+                        std::unordered_map<std::uint64_t, std::pair<int, int>> Span;
+                        for (std::size_t v = 0; v < U.m_VertSurfels.size(); ++v)
+                        {
+                            const auto& T = U.m_VertSurfels[v];
+                            if (T[0] < 0) { ++nNone; continue; }
+                            Tup.insert(Pack(T));
+                            const auto& P = U.m_Pos[v];
+                            const std::uint64_t K = surfel_grid::Key(int(std::floor(P.m_X / 4.0f)), int(std::floor(P.m_Y / 4.0f)), int(std::floor(P.m_Z / 4.0f)));
+                            PerCell[K].insert(Pack(T));
+                            auto [It, bNew] = Span.try_emplace(K, std::pair{ T[0], T[0] });
+                            for (const int x : T) if (x >= 0) { It->second.first = std::min(It->second.first, x); It->second.second = std::max(It->second.second, x); }
+                        }
+                        std::size_t SumCell = 0, MaxCell = 0, Wide = 0;
+                        for (const auto& [K, S] : PerCell) { SumCell += S.size(); MaxCell = std::max(MaxCell, S.size()); }
+                        for (const auto& [K, Sp] : Span) Wide += (Sp.second - Sp.first) > 255;
+                        Add(std::format("vertex bindings: {} vertices, {} with none ({:.1f}%), {} unique ordered tuples ({:.1f}% of the vertices); per 4 m cell: {} cells, tuples {:.1f} a cell on average, {} at most; cells whose index span exceeds 255: {:.1f}%",
+                            U.m_VertSurfels.size(), nNone, 100.0 * double(nNone) / nV, Tup.size(), 100.0 * double(Tup.size()) / nV, PerCell.size(), double(SumCell) / double(std::max<std::size_t>(PerCell.size(), 1)), MaxCell, 100.0 * double(Wide) / double(std::max<std::size_t>(Span.size(), 1))));
+                    }
+                    // read grid
+                    {
+                        std::size_t nCells = 0, nParts = 0, nEnt = 0, nFull = 0;
+                        std::unordered_map<std::uint16_t, std::size_t> Pat;
+                        std::unordered_map<std::uint64_t, std::size_t> Lists;
+                        for (const auto& E : U.m_ReadTable)
+                        {
+                            if (E[1] == 0xFFFFFFFFu) continue;
+                            ++nCells;
+                            for (std::uint32_t p = 0; p < E[3]; ++p)
+                            {
+                                ++nParts;
+                                const std::uint32_t F = U.m_ReadList[E[2] + 4 * p + 2], n = U.m_ReadList[E[2] + 4 * p + 3] & 0xFFFFu;
+                                std::uint64_t h = 1469598103934665603ull ^ n;
+                                for (std::uint32_t k = 0; k < n; ++k)
+                                {
+                                    const std::uint32_t w = U.m_ReadList[F + k];
+                                    ++nEnt; ++Pat[std::uint16_t(w >> 16)]; nFull += (w >> 16) == 0xFFFFu;
+                                    h ^= w; h *= 1099511628211ull;
+                                }
+                                ++Lists[h];
+                            }
+                        }
+                        std::vector<std::size_t> Counts; for (const auto& [k, n] : Pat) Counts.push_back(n);
+                        std::sort(Counts.rbegin(), Counts.rend());
+                        std::size_t Top16 = 0, Top256 = 0; for (std::size_t k = 0; k < Counts.size(); ++k) { if (k < 16) Top16 += Counts[k]; if (k < 256) Top256 += Counts[k]; }
+                        std::size_t nDupLists = 0, nDupWords = 0;
+                        for (const auto& [h, n] : Lists) if (n > 1) { nDupLists += n - 1; }
+                        (void)nDupWords;
+                        const double Dir = double(U.m_ReadTable.size()) * 16.0 + double(nParts) * 16.0, Pay = double(nEnt) * 4.0;
+                        Add(std::format("read grid: {} cells (table {} slots: {:.0f}% used), {} parts ({:.1f} a cell), {} entries ({:.1f} a part); directory (table + part headers) {:.2f} MB, payload {:.2f} MB",
+                            nCells, U.m_ReadTable.size(), 100.0 * double(nCells) / double(std::max<std::size_t>(U.m_ReadTable.size(), 1)), nParts, double(nParts) / double(std::max<std::size_t>(nCells, 1)),
+                            nEnt, double(nEnt) / double(std::max<std::size_t>(nParts, 1)), Dir / 1048576.0, Pay / 1048576.0));
+                        Add(std::format("corner weights: 0xFFFF (all seen) {:.1f}% of the entries; {} distinct patterns; the top 16 cover {:.1f}%, the top 256 {:.1f}%; identical lists (exact entries): {} of {} parts are repeats",
+                            100.0 * double(nFull) / double(std::max<std::size_t>(nEnt, 1)), Counts.size(), 100.0 * double(Top16) / double(std::max<std::size_t>(nEnt, 1)), 100.0 * double(Top256) / double(std::max<std::size_t>(nEnt, 1)), nDupLists, nParts));
+                    }
+                    // neighbours
+                    for (int Lv = 0; Lv < 2; ++Lv)
+                    {
+                        const auto& Nb = U.m_Neighbors[Lv];
+                        std::size_t Max = 0; std::array<std::size_t, 5> H{};
+                        for (std::size_t k = 0; k + 1 < Nb.m_First.size(); ++k) { const std::size_t d = Nb.m_First[k + 1] - Nb.m_First[k]; Max = std::max(Max, d); ++H[std::min<std::size_t>(d / 8, 4)]; }
+                        const double n = double(std::max<std::size_t>(Nb.m_First.size() - 1, 1));
+                        Add(std::format("neighbours L{}: degree mean {:.1f}, max {}; 0-7 {:.0f}%, 8-15 {:.0f}%, 16-23 {:.0f}%, 24-31 {:.0f}%, 32+ {:.0f}%", Lv, double(Nb.m_Index.size()) / n, Max,
+                            100.0 * double(H[0]) / n, 100.0 * double(H[1]) / n, 100.0 * double(H[2]) / n, 100.0 * double(H[3]) / n, 100.0 * double(H[4]) / n));
+                    }
+                    LogMessage(xresource_pipeline::msg_type::INFO, Out);
+                    if (pF) { std::fputs(Out.c_str(), pF); std::fflush(pF); }
+                }
+                if (pF) std::fclose(pF);
+            }
             xlionrender::gi::surfel_mesh M;
             BBox3 Box;
             M.m_Pos.reserve(m_RawGeom.m_Vertex.size());
@@ -1197,23 +1542,194 @@ void ConvertToCompilerMesh(void)
             if (n <= max_gi_surfels_v)
             {
                 LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} surfels at SurfelSize {} (a mesh can have {})", n, R, max_gi_surfels_v));
+                if (const char* pF = std::getenv("XLION_GI_FORCE_SECTIONS"))      // (tests, measurements: sections of about that many owned surfels)
+                {
+                    m_bGISections = true;
+                    BuildGIRegions(M, R, std::size_t(std::max(1, std::atoi(pF))));
+                }
                 return;
             }
 
-            // The smallest SurfelSize that fits: where the count without the rays does (cheap, a lower bound: doubling until one does, then
-            // halving the gap a few times), then up from there until the bake's own count does
-            const auto Fits = [&](float S, bool bRays) { return M.CountSurfels(S, max_gi_surfels_v, bRays) <= max_gi_surfels_v; };
-            float Lo = R, Hi = 0;
-            for (float S = 2 * R; S <= 1024 * R && Hi == 0; S *= 2) (Fits(S, false) ? Hi : Lo) = S;
-            if (Hi > 0) for (int i = 0; i < 3; ++i) { const float S = 0.5f * (Lo + Hi); (Fits(S, false) ? Hi : Lo) = S; }
-            for (int i = 0; Hi > 0 && i < 8 && !Fits(Hi, true); ++i) Hi *= 1.25f;
-
+            // Over one mesh's cap: baked whole and cut into sections (BakeGI, gi_chunks_plan.md), each under it. A section is whole clusters,
+            // and the clusters (ConvertToGeom) are cut at the sections' regions: boxes of the mesh, a k-d split of its triangles by the bake's
+            // candidates (about six to a surfel on Police and the Bistro), so a section is a compact piece of the mesh
+            BuildGIRegions(M, R, section_owned_target_v);
             const auto Size = Box.m_MaxPos - Box.m_MinPos;
-            LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh (too many surfels, found before the bake): at SurfelSize {} it needs more than {} surfels, the most one mesh can have. {} The mesh is {:.1f} x {:.1f} x {:.1f} units, {} triangles"
-                      , R, max_gi_surfels_v
-                      , Hi > 0 ? std::format("Set GI SurfelSize to {:g} or more to keep GI.", SuggestSurfelSize(Hi)) : std::format("No SurfelSize up to {} fits: split it into several geometries (or its scale is wrong).", 1024 * R)
-                      , Size.m_X, Size.m_Y, Size.m_Z, M.m_Tris.size()));
-            m_bGITooBig = true;
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: at SurfelSize {} this mesh needs more than {} surfels (one GI mesh's most): it is baked whole and cut into sections. The mesh is {:.1f} x {:.1f} x {:.1f} units, {} triangles"
+                      , R, max_gi_surfels_v, Size.m_X, Size.m_Y, Size.m_Z, M.m_Tris.size()));
+            m_bGISections = true;
+        }
+
+        // The GI sections' regions (PrecheckGI): a k-d tree over the triangles' centres, each leaf about section_owned_target_v surfels' worth of
+        // the bake's candidates (its rule: by area, by the longest edge, at least one)
+        struct gi_region_node { int m_Axis = -1; float m_Split = 0; int m_Left = -1, m_Right = -1, m_Leaf = -1; };
+        void BuildGIRegions(const xlionrender::gi::surfel_mesh& M, float R, std::size_t Owned)
+        {
+            m_GIRegions.clear(); m_nGIRegions = 0;
+            const float PerArea = 4.0f / (R * R);
+            std::vector<std::uint32_t> Tris(M.m_Tris.size());
+            std::vector<float> W(M.m_Tris.size());
+            std::vector<xlionrender::gi::v3> C(M.m_Tris.size());
+            for (std::size_t t = 0; t < M.m_Tris.size(); ++t)
+            {
+                const auto& T = M.m_Tris[t];
+                const auto& A = M.m_Pos[T[0]]; const auto& B = M.m_Pos[T[1]]; const auto& Cc = M.m_Pos[T[2]];
+                const float a = 0.5f * (B - A).Cross(Cc - A).Length(), Long = std::max({ (B - A).Length(), (Cc - B).Length(), (A - Cc).Length() });
+                W[t] = float(std::max({ 1, int(std::ceil(a * PerArea)), int(std::ceil(Long / (0.5f * R))) }));
+                C[t] = (A + B + Cc) * (1.0f / 3.0f);
+                Tris[t] = std::uint32_t(t);
+            }
+            const double Target = double(Owned) * 5.0;
+            const auto Split = [&](auto&& Self, std::size_t b, std::size_t e) -> int
+            {
+                const int Node = int(m_GIRegions.size());
+                m_GIRegions.push_back({});
+                double Sum = 0; for (std::size_t k = b; k < e; ++k) Sum += W[Tris[k]];
+                if (Sum <= Target || e - b < 2) { m_GIRegions[std::size_t(Node)].m_Leaf = m_nGIRegions++; return Node; }
+                xlionrender::gi::v3 Lo{ 1e30f, 1e30f, 1e30f }, Hi{ -1e30f, -1e30f, -1e30f };
+                for (std::size_t k = b; k < e; ++k) { Lo = xlionrender::gi::v3::Min(Lo, C[Tris[k]]); Hi = xlionrender::gi::v3::Max(Hi, C[Tris[k]]); }
+                const auto E = Hi - Lo;
+                const int Ax = E.m_X >= E.m_Y && E.m_X >= E.m_Z ? 0 : E.m_Y >= E.m_Z ? 1 : 2;
+                const auto At = [&](std::uint32_t t) { return Ax == 0 ? C[t].m_X : Ax == 1 ? C[t].m_Y : C[t].m_Z; };
+                std::sort(Tris.begin() + std::ptrdiff_t(b), Tris.begin() + std::ptrdiff_t(e), [&](std::uint32_t x, std::uint32_t y) { return At(x) != At(y) ? At(x) < At(y) : x < y; });
+                double Acc = 0; std::size_t m = b;
+                while (m + 1 < e && Acc + W[Tris[m]] <= Sum / 2) Acc += W[Tris[m++]];
+                m = std::max(m, b + 1);
+                const float Plane = 0.5f * (At(Tris[m - 1]) + At(Tris[m]));
+                const int L = Self(Self, b, m), Rr = Self(Self, m, e);
+                auto& N = m_GIRegions[std::size_t(Node)];
+                N.m_Axis = Ax; N.m_Split = Plane; N.m_Left = L; N.m_Right = Rr;
+                return Node;
+            };
+            Split(Split, 0, Tris.size());
+        }
+        int GIRegionOf(const xmath::fvec3& P) const noexcept
+        {
+            int n = 0;
+            while (n >= 0 && n < int(m_GIRegions.size()) && m_GIRegions[std::size_t(n)].m_Leaf < 0)
+            {
+                const auto& N = m_GIRegions[std::size_t(n)];
+                n = (N.m_Axis == 0 ? P.m_X : N.m_Axis == 1 ? P.m_Y : P.m_Z) < N.m_Split ? N.m_Left : N.m_Right;
+            }
+            return n >= 0 && n < int(m_GIRegions.size()) ? m_GIRegions[std::size_t(n)].m_Leaf : 0;
+        }
+
+        // Over one GI mesh's cap: the canonical bake over the whole geometry, then cut into sections of whole clusters (PartitionChunks: each
+        // owns some surfels, copies the ones near its border it reads as ghosts, and has its own read grid, neighbours and origins built with
+        // the whole geometry's visibility), saved in xgeom_static version 7's section arrays
+        void BakeGISections(xlionrender::gi::surfel_mesh& M, float R)
+        {
+            namespace gi = xlionrender::gi;
+            const auto T0 = std::chrono::steady_clock::now();
+            const auto Progress = [&](const std::string& What) { LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI sections, {:.1f} s: {}", std::chrono::duration<double>(std::chrono::steady_clock::now() - T0).count(), What)); };
+            Progress(std::format("baking {} triangles, {} vertices, {} clusters", M.m_Tris.size(), M.m_Pos.size(), m_FinalGeom.m_nClusters));
+            {   // the section borders' planes (the regions' k-d splits, mesh space): where to look for a seam
+                std::string Line = "region splits (depth: axis = value):";
+                const auto Walk = [&](auto& Self, int n, int Depth) -> void
+                {
+                    if (n < 0 || n >= int(m_GIRegions.size()) || m_GIRegions[std::size_t(n)].m_Leaf >= 0 || Depth > 3) return;
+                    const auto& N = m_GIRegions[std::size_t(n)];
+                    Line += std::format(" {}:{}={:.2f}", Depth, "XYZ"[N.m_Axis], N.m_Split);
+                    Self(Self, N.m_Left, Depth + 1); Self(Self, N.m_Right, Depth + 1);
+                };
+                Walk(Walk, 0, 0);
+                Progress(Line);
+            }
+            // the progress bar: the bake the first 40%, the sections the next 55%, their packing the rest
+            M.m_OnBakeProgress = [this](float f) { displayProgressBar("Baking the GI surfels", 0.40f * f); };
+            M.Bake(R, 3 * R);
+            M.m_OnBakeProgress = nullptr;
+            Progress(std::format("baked: {} surfels, {} parents; bake ms: candidates {:.0f}, darts {:.0f}, vertex surfels {:.0f}, parents {:.0f}, neighbours {:.0f}", M.m_Levels[0].size(), M.m_Levels[1].size(),
+                M.m_BakeMs[0], M.m_BakeMs[1], M.m_BakeMs[3], M.m_BakeMs[4], M.m_BakeMs[5]));
+            const auto TriCluster = gi::TriClustersOf(m_FinalGeom);
+            const std::size_t Target = section_owned_target_v;      // (a region over the cap after its ghosts is split again by it)
+            gi::chunked_mesh Ch; gi::chunk_report Rep;
+            Rep.m_OnProgress = [this](float f) { displayProgressBar("Baking the GI surfels", 0.40f + 0.55f * f); };
+            m_ClusterRegion.resize(m_FinalGeom.m_nClusters, 0);
+            const bool bFits = gi::PartitionChunks(M, TriCluster, int(m_FinalGeom.m_nClusters), Target, Ch, &Rep, m_ClusterRegion);
+            if (!bFits || Ch.m_Chunks.empty() || Ch.m_Chunks.size() > 0xFFFF)
+            {
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh: {} surfels at SurfelSize {} could not be cut into sections under {} each (a single cluster holds too many: raise SurfelSize there)", M.m_Levels[0].size(), R, gi::chunk_local_cap_v));
+                m_FinalGeom.m_GIMode = xgeom_static::gi_mode::OFF;
+                return;
+            }
+            const auto F = gi::FlattenSections(Ch, m_FinalGeom.m_nVertices);
+            {   // what the sections' packed structures hold (the load-time data), MB
+                double Table = 0, Heads = 0, Lists = 0, Nb = 0, Orig = 0;
+                for (const auto& C : Ch.m_Chunks)
+                {
+                    std::size_t nParts = 0;
+                    for (const auto& E : C.m_ReadTable) if (E[1] != 0xFFFFFFFFu) nParts += E[3];
+                    Table += double(C.m_ReadTable.size()) * 16; Heads += double(nParts) * 16; Lists += double(C.m_ReadList.size() - 4 * nParts) * 4;
+                    for (const auto& N : C.m_Neighbors) Nb += double(N.m_First.size() + 2 * N.m_Index.size()) * 4;
+                    Orig += double(C.m_OriginFirst.size() + C.m_OriginVert.size()) * 4;
+                }
+                const double M = 1.0 / 1048576.0;
+                Progress(std::format("packed structures {:.1f} MB: read tables {:.1f}, part headers {:.1f}, list entries {:.1f}, neighbours {:.1f}, origins {:.1f}",
+                    double(F.m_Derived.size()) * 4 * M, Table * M, Heads * M, Lists * M, Nb * M, Orig * M));
+                // the lists' census (what a smaller list form could drop): parts, entries, all-seen corner weights, lists equal to another's
+                std::size_t nParts = 0, nEnt = 0, nAllSeen = 0, nUniqueEnt = 0, nUniqueSetEnt = 0, nUnique = 0, nUniqueSet = 0;
+                for (const auto& C : Ch.m_Chunks)
+                {
+                    std::unordered_set<std::uint64_t> Lists, Sets;
+                    for (const auto& E : C.m_ReadTable)
+                    {
+                        if (E[1] == 0xFFFFFFFFu) continue;
+                        for (std::uint32_t p = 0; p < E[3]; ++p)
+                        {
+                            const std::uint32_t First = C.m_ReadList[E[2] + 4 * p + 2], n = C.m_ReadList[E[2] + 4 * p + 3] & 0xFFFFu;
+                            std::uint64_t H = 1469598103934665603ull, HS = 1469598103934665603ull;
+                            for (std::uint32_t i = 0; i < n; ++i)
+                            {
+                                const std::uint32_t e = C.m_ReadList[First + i];
+                                if ((e >> 16) == 0xFFFFu) ++nAllSeen;
+                                H  = (H ^ e) * 1099511628211ull;
+                                HS = (HS ^ (e & 0xFFFFu)) * 1099511628211ull;
+                            }
+                            ++nParts; nEnt += n;
+                            if (Lists.insert(H ^ n).second) { ++nUnique; nUniqueEnt += n; }
+                            if (Sets.insert(HS ^ n).second) { ++nUniqueSet; nUniqueSetEnt += n; }
+                        }
+                    }
+                }
+                Progress(std::format("lists: {} parts, {} entries ({:.1f} a part), {:.0f}% all-seen; {} distinct lists ({:.0f}% of the entries), {} distinct surfel sets ({:.0f}% of the entries)",
+                    nParts, nEnt, double(nEnt) / double(std::max<std::size_t>(nParts, 1)), 100.0 * double(nAllSeen) / double(std::max<std::size_t>(nEnt, 1)),
+                    nUnique, 100.0 * double(nUniqueEnt) / double(std::max<std::size_t>(nEnt, 1)), nUniqueSet, 100.0 * double(nUniqueSetEnt) / double(std::max<std::size_t>(nEnt, 1))));
+            }
+            if (F.m_nSharedVerts)
+            {
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("GI turned OFF for this mesh: {} vertices belong to clusters of two sections", F.m_nSharedVerts));
+                m_FinalGeom.m_GIMode = xgeom_static::gi_mode::OFF;
+                return;
+            }
+            const auto ToSurfel = [](const gi::surfel& S, std::uint32_t iParent) { return geom::gi_surfel{ { S.m_Center.m_X, S.m_Center.m_Y, S.m_Center.m_Z }, S.m_Radius, { S.m_Normal.m_X, S.m_Normal.m_Y, S.m_Normal.m_Z }, iParent }; };
+            m_FinalGeom.m_nGISurfels = std::uint32_t(F.m_Fine.size());
+            m_FinalGeom.m_nGIParents = std::uint32_t(F.m_Parents.size());
+            m_FinalGeom.m_pGISurfel  = new geom::gi_surfel[F.m_Fine.size() + F.m_Parents.size()];
+            for (std::size_t i = 0; i < F.m_Fine.size(); ++i) m_FinalGeom.m_pGISurfel[i] = ToSurfel(F.m_Fine[i], F.m_ParentOf[i]);
+            for (std::size_t i = 0; i < F.m_Parents.size(); ++i) m_FinalGeom.m_pGISurfel[F.m_Fine.size() + i] = ToSurfel(F.m_Parents[i], 0);
+            m_FinalGeom.m_pGISurfelMaterial = new geom::gi_surfel_material[F.m_Fine.size()];
+            for (std::size_t i = 0; i < F.m_Materials.size(); ++i) m_FinalGeom.m_pGISurfelMaterial[i] = { F.m_Materials[i].m_U, F.m_Materials[i].m_V, F.m_Materials[i].m_UVRadius, F.m_Materials[i].m_iMaterial };
+            m_FinalGeom.m_nGIDerived = std::uint32_t(F.m_Derived.size());
+            m_FinalGeom.m_pGIDerived = new std::uint32_t[F.m_Derived.size()];
+            std::copy(F.m_Derived.begin(), F.m_Derived.end(), m_FinalGeom.m_pGIDerived);
+            m_FinalGeom.m_pGIVertSurfel = new std::uint16_t[F.m_VertSurfels.size()];
+            std::copy(F.m_VertSurfels.begin(), F.m_VertSurfels.end(), m_FinalGeom.m_pGIVertSurfel);
+            m_FinalGeom.m_nGISections = std::uint32_t(F.m_Sections.size());
+            m_FinalGeom.m_pGISection = new geom::gi_section[F.m_Sections.size()];
+            for (std::size_t k = 0; k < F.m_Sections.size(); ++k)
+            {
+                const auto& S = F.m_Sections[k];
+                m_FinalGeom.m_pGISection[k] = { S.m_iFine, S.m_nFine, S.m_nOwned, S.m_iParent, S.m_nParents, S.m_iDerived, S.m_nDerived, S.m_iGhost, S.m_nGhosts };
+            }
+            m_FinalGeom.m_pGIClusterSection = new std::uint16_t[m_FinalGeom.m_nClusters];
+            for (std::size_t c = 0; c < m_FinalGeom.m_nClusters; ++c) m_FinalGeom.m_pGIClusterSection[c] = c < F.m_ClusterSection.size() ? F.m_ClusterSection[c] : 0;
+            m_FinalGeom.m_nGIGhosts = std::uint32_t(F.m_Ghosts.size());
+            m_FinalGeom.m_pGIGhost = new geom::gi_ghost[F.m_Ghosts.size()];
+            for (std::size_t g = 0; g < F.m_Ghosts.size(); ++g) m_FinalGeom.m_pGIGhost[g] = { F.m_Ghosts[g].m_Chunk, F.m_Ghosts[g].m_Local };
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI in sections: {} surfels ({} parents, {} stored in the sections) cut into {} sections (owned {}..{}, {} split again), {} ghosts ({:.0f}% of the owned), the largest {} local surfels; {:.1f} s",
+                M.m_Levels[0].size(), M.m_Levels[1].size(), F.m_Parents.size(), Rep.m_nChunks, Rep.m_OwnedMin, Rep.m_OwnedMax, Rep.m_nSplitsAgain, Rep.m_GhostsTotal, 100.0 * double(Rep.m_GhostsTotal) / double(std::max<std::size_t>(M.m_Levels[0].size(), 1)),
+                Rep.m_LocalMax, std::chrono::duration<double>(std::chrono::steady_clock::now() - T0).count()));
         }
 
         void BakeGI()
@@ -1236,7 +1752,10 @@ void ConvertToCompilerMesh(void)
             };
 
             M.m_bLeakProtection = m_Descriptor.m_GI.m_bLeakProtection;
+            if (m_bGISections || std::getenv("XLION_GI_FORCE_SECTIONS")) { BakeGISections(M, R); return; }      // (the env: tests and measurements on small meshes)
+            M.m_OnBakeProgress = [this](float f) { displayProgressBar("Baking the GI surfels", 0.9f * f); };       // (then the read grid and coverage)
             M.Bake(R, 3 * R, {}, max_gi_surfels_v);
+            M.m_OnBakeProgress = nullptr;
             if (TooMany()) return;
             {
                 // The per-pixel read's coverage (what the renderer builds at load): reported, with the first holes
@@ -1692,6 +2211,10 @@ void ConvertToCompilerMesh(void)
         std::vector<mesh>               m_CompilerMesh;
         xraw3d::geom                    m_RawGeom;
         bool                            m_bGITooBig     { false };      // PrecheckGI: the bake would not fit, no GI this compile
+        bool                            m_bGISections   { false };      // PrecheckGI: over one GI mesh's cap: BakeGI cuts it into sections
+        std::vector<gi_region_node>     m_GIRegions;                    // ... their regions (BuildGIRegions)
+        int                             m_nGIRegions    { 0 };
+        std::vector<int>                m_ClusterRegion;                // ConvertToGeom: per cluster its region (the sections are these)
         xraw3d::assimp_v3::node         m_RootNode;
         xraw3d::assimp_v3::units        m_Units;                        // of the source file (LoadRaw)
         float                           m_UnitScale     { 1 };          // AutoUnits: the source to meters, before the PreTranslation

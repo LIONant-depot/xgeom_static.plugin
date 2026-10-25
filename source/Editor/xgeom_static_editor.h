@@ -189,6 +189,7 @@ namespace xgeom_static_editor
         xeditor::list_preview_cmd<render_settings> m_ListPreview;
         xeditor::lambda_query_cmd                           m_Statistics;
         xeditor::lambda_query_cmd                           m_DumpGI;
+        xeditor::lambda_query_cmd                           m_GIReadAt;
         xeditor::camera_cmds                               m_CameraCmds;
         xeditor::inspector_panel            m_SettingsInspector{ "Rendering Settings" };
         xrsc::geom_static                   m_GeomRef;
@@ -212,6 +213,14 @@ namespace xgeom_static_editor
                     const auto Path = xstrtool::To(m_Document.m_LogPath + L"\\GIDump.csv");
                     const int  n    = m_Preview.m_Renderer.DumpGI(Path.c_str());
                     return n < 0 ? std::string("DumpGI: no GI (turn a GI view on)") : std::format("DumpGI: ok\nSurfels={}\nFile={}", n, Path);
+                })
+            , m_GIReadAt(m_Undo, "GIReadAt", "What the GI reads at the view's center (the camera's ray to its target, its first hit): the cell's list, each surfel's place, facing, corner weights and light, and the triangle's vertex surfels. The light is the solver's copy: DumpGI first when the GPU owns it. Usage: GIReadAt"
+                , [this]
+                {
+                    const auto& V = m_Preview.m_Settings.m_View;
+                    const auto  O = V.getPosition();
+                    const auto  Dir = (m_Preview.m_Settings.m_CameraTarget - O).NormalizeCopy();
+                    return m_Preview.m_Renderer.DescribeGIRead(O, Dir);
                 })
             , m_CameraCmds(m_Undo, { &m_Preview.m_Settings.m_Angles, &m_Preview.m_Settings.m_Distance, &m_Preview.m_Settings.m_CameraTarget, [this] { m_Preview.m_Settings.Recenter(); }, &m_Preview.m_Settings.m_Camera })
         {

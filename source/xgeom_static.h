@@ -14,7 +14,8 @@ namespace xgeom_static
 
     struct geom
     {
-        inline static constexpr auto xserializer_version_v = 6;    // 2: the GI surfels, 3: where each samples its material, 4: the GI's load-time structures, 5: optional streams, 6: UV1
+        inline static constexpr auto xserializer_version_v = 7;    // 2: the GI surfels, 3: where each samples its material, 4: the GI's load-time structures, 5: optional streams, 6: UV1,
+                                                                    // 7: the GI in sections (a geometry over the 16-bit surfel cap)
 
         // The optional vertex streams (m_OptionalStreams' bits), each its own vertex buffer after the core ones (vertex, vertex_extras).
         // A stream the geometry lacks is bound as a constant default (xLIONRender: white for COLOR0) so the shader reads every one
@@ -104,6 +105,23 @@ namespace xgeom_static
             std::uint32_t           m_iMaterial;
         };
 
+        // GI sections (xLIONRender documentation/gi_chunks_plan.md): a geometry whose surfels pass the 16-bit cap is baked whole, then cut
+        // into sections of whole clusters, each its own GI mesh with section-local indices. With sections the GI arrays hold them one after
+        // the other: m_pGISurfel the sections' fine surfels (each section's owned ones, then its ghosts: copies of other sections' surfels
+        // near its border), then the sections' parents; m_pGISurfelMaterial per fine surfel; m_pGIDerived each section's block; the vertex
+        // surfels section-local (a vertex is its cluster's, a cluster its section's). Without sections (m_nGISections 0): one GI mesh, as before
+        struct gi_section
+        {
+            std::uint32_t           m_iFine, m_nFine, m_nOwned;     // its fine surfels (owned, then ghosts) in the fine ones
+            std::uint32_t           m_iParent, m_nParents;          // its parents in the parents (m_pGISurfel + m_nGISurfels)
+            std::uint32_t           m_iDerived, m_nDerived;         // its load-time structures in m_pGIDerived
+            std::uint32_t           m_iGhost, m_nGhosts;            // its ghosts' owners in m_pGIGhost
+        };
+        struct gi_ghost
+        {
+            std::uint32_t           m_Section, m_Local;             // the surfel a ghost copies: its section and its index there
+        };
+
         using runtime_allocation =std::array<std::size_t, 6*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
 
         //-------------------------------------------------------------------------
@@ -128,8 +146,11 @@ namespace xgeom_static
         inline std::span<gi_surfel>                     getGISurfels                (void)                              const   noexcept { return { m_pGISurfel, m_nGISurfels }; }
         inline std::span<gi_surfel>                     getGIParents                (void)                              const   noexcept { return { m_pGISurfel + m_nGISurfels, m_nGIParents }; }
         inline std::span<gi_surfel_material>            getGISurfelMaterials        (void)                              const   noexcept { return { m_pGISurfelMaterial, m_pGISurfelMaterial ? m_nGISurfels : 0u }; }
-        inline std::span<std::uint16_t>                 getGIVertexSurfels          (void)                              const   noexcept { return { m_pGIVertSurfel, m_pGIVertSurfel ? 4 * std::size_t(m_nVertices) : 0 }; }
+        inline std::span<std::uint16_t>                 getGIVertexSurfels          (void)                              const   noexcept { return { m_pGIVertSurfel, m_nGISurfels ? 4 * std::size_t(m_nVertices) : 0 }; }
         inline std::span<const std::uint32_t>           getGIDerived                (void)                              const   noexcept { return { m_pGIDerived, m_pGIDerived ? m_nGIDerived : 0u }; }
+        inline std::span<const gi_section>              getGISections               (void)                              const   noexcept { return { m_pGISection, m_pGISection ? m_nGISections : 0u }; }
+        inline std::span<const std::uint16_t>           getGIClusterSections        (void)                              const   noexcept { return { m_pGIClusterSection, m_nGISections ? std::size_t(m_nClusters) : 0u }; }    // by the count: xserializer leaves a null pointer's bytes as padding
+        inline std::span<const gi_ghost>                getGIGhosts                 (void)                              const   noexcept { return { m_pGIGhost, m_pGIGhost ? m_nGIGhosts : 0u }; }
 
         xmath::fbbox                    m_BBox;
         char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
@@ -162,6 +183,11 @@ namespace xgeom_static
         std::uint8_t                    m_OptionalStreams;      // stream_*_v bits
         std::size_t                     m_VertexColorOffset;    // stream_color0_v: into m_pData
         std::size_t                     m_UV1Offset;            // stream_uv1_v: into m_pData
+        gi_section*                     m_pGISection;           // m_nGISections (0: the GI is one mesh)
+        std::uint16_t*                  m_pGIClusterSection;    // per cluster its section (with sections)
+        gi_ghost*                       m_pGIGhost;             // m_nGIGhosts
+        std::uint32_t                   m_nGISections;
+        std::uint32_t                   m_nGIGhosts;
     };
 
     //-------------------------------------------------------------------------
@@ -190,6 +216,9 @@ namespace xgeom_static
         if (m_pGIVertSurfel)                delete[] m_pGIVertSurfel;
         if (m_pGISurfelMaterial)            delete[] m_pGISurfelMaterial;
         if (m_pGIDerived)                   delete[] m_pGIDerived;
+        if (m_pGISection)                   delete[] m_pGISection;
+        if (m_pGIClusterSection)            delete[] m_pGIClusterSection;
+        if (m_pGIGhost)                     delete[] m_pGIGhost;
         if (m_pData)                       delete[] m_pData;
 
         Initialize();
@@ -313,6 +342,29 @@ namespace xserializer::io_functions
 
     //-------------------------------------------------------------------------
     template<> inline
+    xerr SerializeIO<xgeom_static::geom::gi_section>(xserializer::stream& Stream, const xgeom_static::geom::gi_section& S) noexcept
+    {
+        xerr Err;
+        false
+            || (Err = Stream.Serialize(S.m_iFine))    || (Err = Stream.Serialize(S.m_nFine))    || (Err = Stream.Serialize(S.m_nOwned))
+            || (Err = Stream.Serialize(S.m_iParent))  || (Err = Stream.Serialize(S.m_nParents))
+            || (Err = Stream.Serialize(S.m_iDerived)) || (Err = Stream.Serialize(S.m_nDerived))
+            || (Err = Stream.Serialize(S.m_iGhost))   || (Err = Stream.Serialize(S.m_nGhosts))
+            ;
+        return Err;
+    }
+
+    //-------------------------------------------------------------------------
+    template<> inline
+    xerr SerializeIO<xgeom_static::geom::gi_ghost>(xserializer::stream& Stream, const xgeom_static::geom::gi_ghost& G) noexcept
+    {
+        xerr Err;
+        false || (Err = Stream.Serialize(G.m_Section)) || (Err = Stream.Serialize(G.m_Local));
+        return Err;
+    }
+
+    //-------------------------------------------------------------------------
+    template<> inline
     xerr SerializeIO<xgeom_static::geom::gi_surfel_material>(xserializer::stream& Stream, const xgeom_static::geom::gi_surfel_material& M) noexcept
     {
         xerr Err;
@@ -367,6 +419,11 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_OptionalStreams))
             || (Err = Stream.Serialize(Geom.m_VertexColorOffset))
             || (Err = Stream.Serialize(Geom.m_UV1Offset))
+            || (Err = Stream.Serialize(Geom.m_nGISections))
+            || (Err = Stream.Serialize(Geom.m_pGISection,                   Geom.m_pGISection ? Geom.m_nGISections : 0u))
+            || (Err = Stream.Serialize(Geom.m_pGIClusterSection,            Geom.getGIClusterSections().size()))
+            || (Err = Stream.Serialize(Geom.m_nGIGhosts))
+            || (Err = Stream.Serialize(Geom.m_pGIGhost,                     Geom.m_pGIGhost ? Geom.m_nGIGhosts : 0u))
             ;
         return Err;
     }
