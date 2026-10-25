@@ -96,6 +96,9 @@ namespace xgeom_static_editor
         , obj_scope < "Camera Info"
             , obj_member<"Position", +[](render_settings& O)->auto& { static xmath::fvec3 Pos; Pos = O.m_View.getPosition(); return Pos; }, member_help<"Current camera position in world space">>
             , obj_member<"Target",   &render_settings::m_CameraTarget, member_help<"Point the camera is looking at in world space">>
+            , obj_member<"Distance", &render_settings::m_Distance, member_help<"The camera's distance to its target (-1: fit the geometry)">>
+            , obj_member<"Pitch",    +[](render_settings& O)->auto& { return O.m_Angles.m_Pitch.m_Value; }, member_help<"The camera's pitch around its target, radians">>
+            , obj_member<"Yaw",      +[](render_settings& O)->auto& { return O.m_Angles.m_Yaw.m_Value; }, member_help<"The camera's yaw around its target, radians">>
             , obj_action<"Recenter", &render_settings::Recenter, member_help<"Reset camera to center on the geometry with optimal framing">>>
         , obj_scope< "Lighting Info"
             , obj_member<"Direction",           &render_settings::m_LightDirection, member_help<"Light direction vector (normalized) in world space">>
