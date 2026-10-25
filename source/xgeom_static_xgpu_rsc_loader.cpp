@@ -85,6 +85,38 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
         }
     }
 
+    // Measurement (XLION_GEOM_SIZES): what the geometry's parts weigh, the GI's derived block by its parts (its sections' blocks one after
+    // the other: xlionrender gi::surfel_mesh::UnpackDerived's layout - a header, the read grid's table and lists, two levels of neighbors,
+    // the rays' origins)
+    if (std::getenv("XLION_GEOM_SIZES"))
+    {
+        const auto MB = [](std::size_t b) { return double(b) / (1024.0 * 1024.0); };
+        const auto& G = *pXGPUGeom;
+        std::size_t Table = 0, List = 0, Nbr = 0, Orig = 0, Hdr = 0;
+        const auto D = G.getGIDerived();
+        const auto Block = [&](std::size_t i, std::size_t End)
+        {
+            if (i + 8 > End) return;
+            const std::uint32_t nTable = D[i + 6], nList = D[i + 7]; Hdr += 8; i += 8;
+            Table += 4 * std::size_t(nTable); List += nList; i += 4 * std::size_t(nTable) + nList;
+            for (int l = 0; l < 2 && i + 2 <= End; ++l) { const std::uint32_t nF = D[i], nI = D[i + 1]; Nbr += 2 + nF + 2 * std::size_t(nI); i += 2 + nF + 2 * std::size_t(nI); }
+            if (i + 2 <= End) Orig += End - i;
+        };
+        if (G.getGISections().empty()) Block(0, D.size());
+        else for (const auto& S : G.getGISections()) Block(S.m_iDerived, std::size_t(S.m_iDerived) + S.m_nDerived);
+        const std::size_t nV = G.m_nVertices;
+        std::printf("GEOMSIZES %ls: vertices %zu (%.1f MB) extras %.1f MB indices %.1f MB clusters %.1f MB colors/uv1 %.1f MB | GI: surfels %u + parents %u (%.1f MB) vertex surfels %.1f MB materials %.1f MB"
+                    " derived %.1f MB (read table %.1f, read lists %.1f, neighbors %.1f, origins %.1f, headers %.2f) sections %u ghosts %u (%.2f MB) | file data %.1f MB\n",
+                    Path.c_str(), nV, MB(nV * sizeof(xgeom_static::geom::vertex)), MB(nV * sizeof(xgeom_static::geom::vertex_extras)), MB(G.getIndices().size() * sizeof(std::uint16_t)),
+                    MB(G.getClusterData().size() * sizeof(xgeom_static::geom::cluster_data) + G.getClusters().size() * sizeof(xgeom_static::geom::cluster)),
+                    MB(G.getVertexColors().size() * 4 + G.getUV1s().size() * 8),
+                    G.m_nGISurfels, G.m_nGIParents, MB((std::size_t(G.m_nGISurfels) + G.m_nGIParents) * sizeof(xgeom_static::geom::gi_surfel)), MB(G.getGIVertexSurfels().size() * 2),
+                    MB(G.getGISurfelMaterials().size() * sizeof(xgeom_static::geom::gi_surfel_material)), MB(D.size() * 4), MB(Table * 4), MB(List * 4), MB(Nbr * 4), MB(Orig * 4), MB(Hdr * 4),
+                    G.m_nGISections, G.m_nGIGhosts, MB(G.getGISections().size() * sizeof(xgeom_static::geom::gi_section) + G.getGIGhosts().size() * sizeof(xgeom_static::geom::gi_ghost) + G.getGIClusterSections().size() * 2),
+                    MB(G.m_DataSize));
+        std::fflush(stdout);
+    }
+
     return pXGPUGeom;
 }
 
