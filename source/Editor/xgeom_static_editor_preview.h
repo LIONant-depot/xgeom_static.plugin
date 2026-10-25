@@ -289,7 +289,7 @@ namespace xgeom_static_editor::preview
                 }
                 if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
-                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }))) UseDefaultMaterial();
+                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable))) UseDefaultMaterial();
             }
         }
 
