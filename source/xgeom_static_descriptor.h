@@ -148,12 +148,7 @@ namespace xgeom_static
         int                         m_RefCount  = 0;
         xrsc::material_instance_ref m_Instance  = {};           // saved here; the MaterialInstance list (by place) is what the editor shows and edits
 
-        static std::uint64_t NameKey( std::string_view Name ) noexcept           // FNV-1a 64 of the name's bytes (tools/Scripts/convert_keyed_geom_materials.py: the same)
-        {
-            std::uint64_t H = 14695981039346656037ull;
-            for (const char c : Name) { H ^= std::uint8_t(c); H *= 1099511628211ull; }
-            return H;
-        }
+        static std::uint64_t NameKey( std::string_view Name ) noexcept { return xmaterial_instance::import::MaterialKey(Name); }
 
         XPROPERTY_DEF
         ( "material_details", material_details
@@ -589,18 +584,12 @@ namespace xgeom_static
         {
             if (not isReading)
             {
-                for (std::size_t i = 0; i < m_MaterialDetailsList.size(); ++i) m_MaterialDetailsList[i].m_Instance = i < m_MaterialInstRefList.size() ? m_MaterialInstRefList[i] : xrsc::material_instance_ref{};
+                xmaterial_instance::import::SlotsToMaterials(m_MaterialDetailsList, m_MaterialInstRefList);
                 return xresource_pipeline::descriptor::base::Serialize(false, FileName, Context);
             }
             m_MaterialInstRefList.clear();
             if (auto Err = xresource_pipeline::descriptor::base::Serialize(true, FileName, Context); Err) return Err;
-            const bool bOldForm = !m_MaterialInstRefList.empty();
-            m_MaterialInstRefList.resize(m_MaterialDetailsList.size());
-            for (std::size_t i = 0; i < m_MaterialDetailsList.size(); ++i)
-            {
-                if (bOldForm) m_MaterialDetailsList[i].m_Instance = m_MaterialInstRefList[i];
-                else          m_MaterialInstRefList[i] = m_MaterialDetailsList[i].m_Instance;
-            }
+            xmaterial_instance::import::SlotsFromMaterials(m_MaterialDetailsList, m_MaterialInstRefList);
             return {};
         }
         std::vector<ungroup_mesh>                   m_UngroupMeshList       = {};
