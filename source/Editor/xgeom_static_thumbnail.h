@@ -87,14 +87,8 @@ namespace xgeom_static_editor
             S.m_CameraTarget   = pGeom->m_BBox.getCenter();
             S.m_Distance       = xeditor::ComputeTightFitDistance(S.m_View, S.m_Angles, S.m_CameraTarget, pGeom->m_BBox.m_Min, pGeom->m_BBox.m_Max);
 
-            // The light's view of the geometry, into m_Runtime's own m_ShadowMap - a SEPARATE, SEQUENTIAL
-            // render pass (opens and fully ends via RenderShadow's own scope before this call returns),
-            // not nested inside our own pass below. The earlier crash ("assert(m_BeginState == 1)" in
-            // xgpu_vulkan_window.cpp) came from calling RenderShadow from INSIDE an already-open pass
-            // handed in by the old shared cache; now that this renderer owns and sequences its own passes
-            // end-to-end, shadow-then-main is exactly the same two-separate-passes-per-frame shape the
-            // interactive preview panel already uses (RenderShadow, then later Draw, from RenderPreview()).
-            // Shadow map, lit geometry (xLIONRender) and overlays, each its own render pass, all ended when Render returns
+            // The renderer's passes (its shadows, the lit geometry and ground) and the overlays, each its own render pass, all ended when
+            // Render returns - never inside an open pass (the old crash, "assert(m_BeginState == 1)" in xgpu_vulkan_window.cpp)
             m_Runtime.Render(Window, *pGeom, s_CellPixels, s_CellPixels);
             if (!m_Runtime.m_RenderView.m_Output.m_Private) return false;
 
