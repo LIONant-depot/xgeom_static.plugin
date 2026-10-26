@@ -139,14 +139,28 @@ namespace xgeom_static
     };
     XPROPERTY_REG(delete_entry)
 
+    // A material of the source file, addressed by its name ("MaterialDetailsList[G:key]/...", key = NameKey(name), xproperty::keyed_vector): the instance
+    // assigned to it stays with it when the source file adds, removes or reorders its materials
     struct material_details
     {
+        std::uint64_t               m_Key       = 0;            // NameKey(m_Name): its address (the path's; written by its Name)
         std::string                 m_Name;
-        int                         m_RefCount = 0;
+        int                         m_RefCount  = 0;
+        xrsc::material_instance_ref m_Instance  = {};           // saved here; the MaterialInstance list (by place) is what the editor shows and edits
+
+        static std::uint64_t NameKey( std::string_view Name ) noexcept           // FNV-1a 64 of the name's bytes (tools/Scripts/convert_keyed_geom_materials.py: the same)
+        {
+            std::uint64_t H = 14695981039346656037ull;
+            for (const char c : Name) { H ^= std::uint8_t(c); H *= 1099511628211ull; }
+            return H;
+        }
+
         XPROPERTY_DEF
         ( "material_details", material_details
-        , obj_member<"Name", &material_details::m_Name, member_flags< flags::SHOW_READONLY>, member_help<"Name of the material (read-only)">>
+        , obj_member<"Name", +[](material_details& O, bool bRead, std::string& V) { if (bRead) V = O.m_Name; else { O.m_Name = V; O.m_Key = NameKey(V); } }
+            , member_flags< flags::SHOW_READONLY>, member_help<"Name of the material (read-only)">>
         , obj_member<"RefCount", &material_details::m_RefCount, member_flags< flags::SHOW_READONLY>, member_help<"Number of times this material is used in the current descriptor configuration (read-only)">>
+        , obj_member<"Instance", &material_details::m_Instance, member_flags< flags::DONT_SHOW>, member_help<"The material instance assigned to this material (saved here; edited in the MaterialInstance list)">>
         )
     };
     XPROPERTY_REG(material_details)
@@ -566,8 +580,29 @@ namespace xgeom_static
         pre_transform                               m_PreTranslation        = {};
         bool                                        m_bMergeAllMeshes       = true;
         mesh_details                                m_AllMeshesDetails      = {};
-        std::vector<material_details>               m_MaterialDetailsList   = {};
-        std::vector<xrsc::material_instance_ref>    m_MaterialInstRefList   = {};
+        xproperty::keyed_vector<material_details, &material_details::m_Key> m_MaterialDetailsList = {};     // by material name
+        std::vector<xrsc::material_instance_ref>    m_MaterialInstRefList   = {};       // per material, by place: what the editor and the import edit (not saved: each entry keeps its own)
+
+        // Saved: each material keeps its instance (m_MaterialInstRefList by place is copied in). Read: back into m_MaterialInstRefList - a file of the old
+        // form kept them there, by place, and its materials by place too: they pair as they are
+        xerr Serialize(bool isReading, std::wstring_view FileName, xproperty::settings::context& Context) noexcept override
+        {
+            if (not isReading)
+            {
+                for (std::size_t i = 0; i < m_MaterialDetailsList.size(); ++i) m_MaterialDetailsList[i].m_Instance = i < m_MaterialInstRefList.size() ? m_MaterialInstRefList[i] : xrsc::material_instance_ref{};
+                return xresource_pipeline::descriptor::base::Serialize(false, FileName, Context);
+            }
+            m_MaterialInstRefList.clear();
+            if (auto Err = xresource_pipeline::descriptor::base::Serialize(true, FileName, Context); Err) return Err;
+            const bool bOldForm = !m_MaterialInstRefList.empty();
+            m_MaterialInstRefList.resize(m_MaterialDetailsList.size());
+            for (std::size_t i = 0; i < m_MaterialDetailsList.size(); ++i)
+            {
+                if (bOldForm) m_MaterialDetailsList[i].m_Instance = m_MaterialInstRefList[i];
+                else          m_MaterialInstRefList[i] = m_MaterialDetailsList[i].m_Instance;
+            }
+            return {};
+        }
         std::vector<ungroup_mesh>                   m_UngroupMeshList       = {};
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
@@ -607,7 +642,7 @@ namespace xgeom_static
             , obj_member<"Deleted List",       &descriptor::m_DeleteEntryList,                                     member_help<"List of nodes and meshes marked for deletion; these will not be included in the compiled geometry">>
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>, member_help<"List of materials used by this geometry with usage counts (hidden by default)">>
             , obj_member<"ImportMaterials",     &descriptor::m_ImportMaterials, member_ui_open<true>, member_help<"Import the materials and textures of the model (generated, virtual resources) instead of assigning every material instance by hand">>
-            , obj_member<"MaterialInstance",    &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<>, member_help<"References to material instances assigned to this geometry">>
+            , obj_member<"MaterialInstance",    &descriptor::m_MaterialInstRefList, member_flags<flags::DONT_SAVE>, member_ui_open<true>, member_array_size_readonly<>, member_help<"References to material instances assigned to this geometry">>
         )
     };
     XPROPERTY_VREG(descriptor)
@@ -832,7 +867,7 @@ namespace xgeom_static
         {
             if (auto Index = findMaterial(E); Index == -1)
             {
-                m_MaterialDetailsList.emplace_back(E);
+                m_MaterialDetailsList.emplace_back(material_details{ .m_Key = material_details::NameKey(E), .m_Name = E });
                 m_MaterialInstRefList.emplace_back();
             }
         }
