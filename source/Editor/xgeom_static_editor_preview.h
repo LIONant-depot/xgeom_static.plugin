@@ -251,6 +251,7 @@ namespace xgeom_static_editor::preview
                 if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
                 if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable))) UseDefaultMaterial();
+                else if (pMat->getShaderGBuffer().m_Private) (void)m_Renderer.SetMaterialGBuffer(m_Materials[Index], pMat->getShaderGBuffer());     // (xLIONRender's screen tail: its thin G-buffer)
             }
         }
 
