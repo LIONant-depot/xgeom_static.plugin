@@ -73,7 +73,7 @@ namespace xgeom_static_editor
         xmath::fvec3        m_LightPosition;
         float               m_ShadowDetailDistance = 2.0f;      // the sun's shadow levels: how many times farther each keeps its detail
         float               m_ShadowLevelBlend     = 0.95f;     // ... the share of a level that blends into the next
-        float               m_SunSourceAngle       = 0.2f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
+        float               m_SunSourceAngle       = 0.4f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
         bool                m_bWireFrame;
         bool                m_bTangents;
         bool                m_bBinormals;
