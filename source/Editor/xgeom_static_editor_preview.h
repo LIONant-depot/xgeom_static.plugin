@@ -435,7 +435,7 @@ namespace xgeom_static_editor::preview
             Scene.m_GI.m_bShowBlend = true;                 // (the shown GI moves toward the new light: never a jump)
             auto* pHost = xeditor::host::current();                                 // what the foreground leaves of the host's shared GI allowance
             if (pHost) Scene.m_GI.m_TraceAllowanceMs = pHost->m_GIAllowance.Grant(false);
-            Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f), .m_SourceAngle = std::max(S.m_SunSourceAngle, 0.0f), .m_ShadowLevelBlend = S.m_ShadowLevelBlend, .m_ShadowDetailDistance = S.m_ShadowDetailDistance };     // (Render Settings > Lighting Info)
+            Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f), .m_SourceAngle = std::max(S.m_SunSourceAngle, 0.0f), .m_ShadowLevelBlend = S.m_ShadowLevelBlend, .m_ShadowDiscTaps = std::clamp(S.m_SunDiscTaps, 1, 16), .m_ShadowDetailDistance = S.m_ShadowDetailDistance };     // (Render Settings > Lighting Info)
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
             // The environment cubemap lights instead of the flat fill (a texture that is not a cubemap: the flat fill)
