@@ -71,6 +71,9 @@ namespace xgeom_static_editor
         xgpu::tools::view   m_LightingView;
         xmath::fvec3        m_LightDirection;
         xmath::fvec3        m_LightPosition;
+        float               m_ShadowDetailDistance = 2.0f;      // the sun's shadow levels: how many times farther each keeps its detail
+        float               m_ShadowLevelBlend     = 0.95f;     // ... the share of a level that blends into the next
+        float               m_SunSourceAngle       = 0.2f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
         bool                m_bWireFrame;
         bool                m_bTangents;
         bool                m_bBinormals;
@@ -103,6 +106,9 @@ namespace xgeom_static_editor
         , obj_scope< "Lighting Info"
             , obj_member<"Direction",           &render_settings::m_LightDirection, member_help<"Light direction vector (normalized) in world space">>
             , obj_member<"Position",            &render_settings::m_LightPosition, member_help<"Light position in world space when not following camera">>
+            , obj_member<"ShadowDetailDistance", &render_settings::m_ShadowDetailDistance, member_help<"How far the sharp shadow levels reach: each level switches to the next coarser one this many times farther away (more shadow pages). 1: the minimum detail">>
+            , obj_member<"SunSourceAngle",     &render_settings::m_SunSourceAngle, member_help<"The sun's disc, degrees across (the real sun: about 0.53): shadows sharp where the caster touches, softer with the distance to it. 0: hard shadows">>
+            , obj_member<"ShadowLevelBlend",   &render_settings::m_ShadowLevelBlend, member_help<"How long the blend between two shadow levels is: the share of a level over which it fades smoothly into the next">>
             , obj_member<"LightFollowsCamera",  &render_settings::m_LightFollowsCamera, member_help<"Has a key of its own (see Project Settings > Keymap: GeomStatic/Preview/LightFollowsCamera).\n"
                                                                                                     "When enabled, the light moves with the camera for consistent shadow direction.\n"
                                                                                                     "Disabled: the light stays where it is.">>

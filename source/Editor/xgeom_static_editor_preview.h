@@ -405,17 +405,21 @@ namespace xgeom_static_editor::preview
                 if (!m_bGIReady)
                 {
                     m_bGIReady = true;
+                    const auto TG0 = clk::now();      // (measurement: the load's steps, on this thread)
                     xlionrender::gi::surfel_mesh Surfels;
                     xlionrender::gi::FromXGeomStatic(Surfels, Geom);
+                    const auto TG1 = clk::now();
                     if (!Geom.getGISections().empty())        // over one GI mesh's cap: its sections (xLIONRender gi_chunks_plan.md)
                     {
                         std::vector<xlionrender::gi::loaded_section> L;
                         std::vector<std::uint16_t> ClusterSection; std::vector<int> ClusterVertexDelta;
                         if (xlionrender::gi::SectionsFromXGeomStatic(Surfels, Geom, L, ClusterSection, ClusterVertexDelta))
                         {
+                            const auto TG2 = clk::now();
                             std::vector<xlionrender::instance::gi_section_in> In;
                             for (auto& Sec : L) In.push_back({ std::move(Sec.m_Surfels), {}, Sec.m_nOwned, std::move(Sec.m_Ghosts) });
                             (void)m_Renderer.SetMeshGISections(m_Mesh, std::move(In), std::move(ClusterSection), std::move(ClusterVertexDelta));
+                            std::printf("GIPREVIEW load on the main thread: the surfels %.0f, the %zu sections %.0f, the renderer's buffers %.0f ms\n", PMs(TG0, TG1), L.size(), PMs(TG1, TG2), PMs(TG2, clk::now())); std::fflush(stdout);
                         }
                     }
                     else if (xlionrender::gi::SurfelsFromXGeomStatic(Surfels, Geom) && Surfels.m_Levels[0].size() < 0xFFFF) (void)m_Renderer.SetMeshGI(m_Mesh, std::move(Surfels));
@@ -428,9 +432,10 @@ namespace xgeom_static_editor::preview
                                         : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
             Scene.m_GI.m_Saturation = S.m_GISaturation;
+            Scene.m_GI.m_bShowBlend = true;                 // (the shown GI moves toward the new light: never a jump)
             auto* pHost = xeditor::host::current();                                 // what the foreground leaves of the host's shared GI allowance
             if (pHost) Scene.m_GI.m_TraceAllowanceMs = pHost->m_GIAllowance.Grant(false);
-            Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
+            Scene.m_Sun     = { .m_Direction = S.m_LightDirection, .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f), .m_SourceAngle = std::max(S.m_SunSourceAngle, 0.0f), .m_ShadowLevelBlend = S.m_ShadowLevelBlend, .m_ShadowDetailDistance = S.m_ShadowDetailDistance };     // (Render Settings > Lighting Info)
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
             // The environment cubemap lights instead of the flat fill (a texture that is not a cubemap: the flat fill)
