@@ -55,7 +55,7 @@ namespace xgeom_static_compiler
 
         struct lod
         {
-            float                           m_ScreenArea;
+            float                           m_Error;        // object space, chained (GenenateLODs)
             std::vector<std::uint32_t>      m_Indices;
         };
 
@@ -311,13 +311,131 @@ void ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
+        // A LOD group: the triangles that switch LOD together - a mesh of its own (its LODs' errors are its own: the renderer picks a LOD a
+        // group by its projected error; a merged level mesh - the Bistro - was one mesh, one error for the whole level). Every submesh is
+        // simplified with its border locked, so groups and materials meet without cracks at any mix of LODs. ponytail: locked borders keep
+        // the groups' outlines at LOD 0's density
+        static constexpr std::size_t lod_group_tris_v = 32768;
+
+        // M's triangles (every submesh's) in spatial groups of at most lod_group_tris_v (median splits of their centroids along the longest
+        // axis), each a mesh named M's + "#k" with a submesh per material it holds, the vertices they use
+        static std::vector<mesh> SplitIntoGroups(mesh&& M)
+        {
+            std::size_t nTris = 0;
+            for (const auto& S : M.m_SubMesh) nTris += S.m_Indices.size() / 3;
+            if (nTris <= lod_group_tris_v) { std::vector<mesh> One; One.push_back(std::move(M)); return One; }
+            struct tri { std::uint32_t m_Sub, m_T; };
+            std::vector<tri> Tris; Tris.reserve(nTris);
+            std::vector<xmath::fvec3> Ctr; Ctr.reserve(nTris);
+            for (std::uint32_t s = 0; s < M.m_SubMesh.size(); ++s)
+            {
+                const auto& S = M.m_SubMesh[s];
+                for (std::uint32_t t = 0; t < S.m_Indices.size() / 3; ++t)
+                {
+                    Tris.push_back({ s, t });
+                    Ctr.push_back((S.m_Vertex[S.m_Indices[3 * t]].m_Position + S.m_Vertex[S.m_Indices[3 * t + 1]].m_Position + S.m_Vertex[S.m_Indices[3 * t + 2]].m_Position) * (1.0f / 3.0f));
+                }
+            }
+            std::vector<std::vector<std::uint32_t>> Groups, Stack(1);
+            Stack[0].resize(nTris);
+            for (std::uint32_t i = 0; i < nTris; ++i) Stack[0][i] = i;
+            while (!Stack.empty())
+            {
+                auto T = std::move(Stack.back()); Stack.pop_back();
+                if (T.size() <= lod_group_tris_v) { Groups.push_back(std::move(T)); continue; }
+                BBox3 B;
+                for (const auto i : T) B.Update(Ctr[i]);
+                const auto E    = B.m_MaxPos - B.m_MinPos;
+                const int  Axis = E.m_X >= E.m_Y && E.m_X >= E.m_Z ? 0 : E.m_Y >= E.m_Z ? 1 : 2;
+                const auto Mid  = T.begin() + std::ptrdiff_t(T.size() / 2);
+                std::nth_element(T.begin(), Mid, T.end(), [&](std::uint32_t a, std::uint32_t b) { return Ctr[a][Axis] < Ctr[b][Axis]; });
+                Stack.emplace_back(T.begin(), Mid);
+                Stack.emplace_back(Mid, T.end());
+            }
+            std::vector<mesh> Out(Groups.size());
+            std::vector<std::vector<std::int32_t>> Remap(M.m_SubMesh.size());
+            for (std::size_t s = 0; s < M.m_SubMesh.size(); ++s) Remap[s].assign(M.m_SubMesh[s].m_Vertex.size(), -1);
+            for (std::size_t g = 0; g < Groups.size(); ++g)
+            {
+                auto& G = Out[g];
+                G.m_Name = std::format("{}#{}", M.m_Name, g);
+                std::vector<std::int32_t> SubOf(M.m_SubMesh.size(), -1);       // the group's submesh of each of M's
+                for (const auto i : Groups[g])
+                {
+                    const auto& [s, t] = Tris[i];
+                    const auto& S = M.m_SubMesh[s];
+                    if (SubOf[s] < 0)
+                    {
+                        SubOf[s] = std::int32_t(G.m_SubMesh.size());
+                        auto& N = G.m_SubMesh.emplace_back();
+                        N.m_iMaterial = S.m_iMaterial; N.m_nWeights = S.m_nWeights; N.m_nUVs = S.m_nUVs;
+                        N.m_bHasColor = S.m_bHasColor; N.m_bHasUV1 = S.m_bHasUV1; N.m_bHasNormal = S.m_bHasNormal; N.m_bHasBTN = S.m_bHasBTN;
+                    }
+                    auto& N = G.m_SubMesh[std::size_t(SubOf[s])];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const std::uint32_t v = S.m_Indices[3 * t + k];
+                        auto& r = Remap[s][v];
+                        if (r < 0) { r = std::int32_t(N.m_Vertex.size()); N.m_Vertex.push_back(S.m_Vertex[v]); }
+                        N.m_Indices.push_back(std::uint32_t(r));
+                    }
+                }
+                for (const auto i : Groups[g]) for (int k = 0; k < 3; ++k) Remap[Tris[i].m_Sub][M.m_SubMesh[Tris[i].m_Sub].m_Indices[3 * Tris[i].m_T + k]] = -1;
+            }
+            return Out;
+        }
+
+        // S's LOD chain (each a fraction of the previous one's indices): attribute-aware (the main view draws the LODs): the normal, both UV
+        // sets and the colour weigh in, their error clamped to the position's scale (meshopt_SimplifyErrorClamped: the error is the LOD
+        // pick's), the UV/normal seams kept (meshopt_SimplifyPermissive let them collapse: textures stretched over whole facades at LOD 1 in
+        // Bistro); its border locked (no cracks against its neighbours at another LOD)
+        static void SimplifyChain(sub_mesh& S, const auto& LODs)
+        {
+            const std::size_t nV = S.m_Vertex.size();
+            if (nV == 0) return;
+            const int nA = 3 + 2 + (S.m_bHasUV1 ? 2 : 0) + (S.m_bHasColor ? 4 : 0);
+            std::vector<float> Attr(nV * std::size_t(nA)), Weights{ 0.5f, 0.5f, 0.5f, 1.0f, 1.0f };
+            if (S.m_bHasUV1)   Weights.insert(Weights.end(), { 0.5f, 0.5f });
+            if (S.m_bHasColor) Weights.insert(Weights.end(), { 0.25f, 0.25f, 0.25f, 0.25f });
+            for (std::size_t v = 0; v < nV; ++v)
+            {
+                const auto& V = S.m_Vertex[v];
+                float* p = &Attr[v * std::size_t(nA)];
+                *p++ = V.m_Normal.m_X; *p++ = V.m_Normal.m_Y; *p++ = V.m_Normal.m_Z;
+                *p++ = V.m_UVs[0].m_X; *p++ = V.m_UVs[0].m_Y;
+                if (S.m_bHasUV1)   { *p++ = V.m_UVs[1].m_X; *p++ = V.m_UVs[1].m_Y; }
+                if (S.m_bHasColor) for (int c = 0; c < 4; ++c) *p++ = float((V.m_Color.m_Value >> (8 * c)) & 0xFFu) / 255.0f;
+            }
+            std::size_t IndexCount = S.m_Indices.size();
+            float       Error      = 0;
+            for (const auto& L : LODs)
+            {
+                const std::size_t target_index_count = std::size_t(IndexCount * L.m_LODReduction + 0.005f) / 3 * 3;
+                const auto& Source = S.m_LODs.size() ? S.m_LODs.back().m_Indices : S.m_Indices;
+                if (Source.size() < target_index_count) break;
+                auto& NewLod = S.m_LODs.emplace_back();
+                NewLod.m_Indices.resize(Source.size());
+                float LodError = 0;
+                const std::size_t new_size = meshopt_simplifyWithAttributes(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], nV, sizeof(vertex)
+                                                                          , Attr.data(), sizeof(float) * std::size_t(nA), Weights.data(), std::size_t(nA), nullptr, target_index_count, FLT_MAX     // (the count decides; the error is recorded)
+                                                                          , meshopt_SimplifyLockBorder | meshopt_SimplifyErrorAbsolute | meshopt_SimplifyErrorClamped, &LodError);
+                NewLod.m_Indices.resize(new_size);
+                // a LOD that does not cut at least a quarter of the previous one's indices is not worth its memory and draws (the simplifier
+                // reached its error bound first): dropped, and no coarser one for this submesh
+                if (new_size > Source.size() * 3 / 4 || new_size == 0) { S.m_LODs.pop_back(); break; }
+                Error += LodError;                              // (chained: the errors add up, object space)
+                NewLod.m_Error = Error;
+                IndexCount = new_size;
+            }
+        }
+
         void GenenateLODs()
         {
+            std::vector<mesh> Out;
             for (auto& M : m_CompilerMesh)
             {
                 auto it = m_NameToDetail.find(M.m_Name);
-                if (it == m_NameToDetail.end())
-                    continue;
+                if (it == m_NameToDetail.end()) { Out.push_back(std::move(M)); continue; }
 
                 auto* details = it->second;
                 // XGEOM_STATIC_LODS=0.5,0.25,...: those LODs (each a fraction of the previous one's indices) for a mesh whose descriptor has
@@ -332,42 +450,16 @@ void ConvertToCompilerMesh(void)
                             if (f > 0.0f && f < 1.0f) details->m_LODs.push_back({ .m_LODReduction = f, .m_ScreenArea = 0 });
                             q = *pEnd == ',' ? pEnd + 1 : pEnd;
                         }
-                if (details->m_LODs.empty())
-                    continue;
+                if (details->m_LODs.empty()) { Out.push_back(std::move(M)); continue; }
 
-                for (auto& S : M.m_SubMesh)
+                for (auto& G : SplitIntoGroups(std::move(M)))
                 {
-                    std::size_t IndexCount = S.m_Indices.size();
-                    // welded by position first (meshopt_generateShadowIndexBuffer: every vertex at a position becomes its first): the UV and
-                    // normal seams' split vertices kept the simplifier from collapsing anything across them - the LODs came out nearly LOD 0's
-                    // size. The LODs then use those first vertices (their positions exact, their UVs/normals one side's: the shadow pages draw
-                    // positions only; the main view's LODs want an attribute-aware simplify)
-                    std::vector<std::uint32_t> Welded(S.m_Indices.size());
-                    if (!S.m_Indices.empty()) meshopt_generateShadowIndexBuffer(Welded.data(), S.m_Indices.data(), S.m_Indices.size(), &S.m_Vertex[0].m_Position, S.m_Vertex.size(), sizeof(float) * 3, sizeof(vertex));
-
-                    for (size_t i = 0; i < details->m_LODs.size(); ++i)
-                    {
-                        const std::size_t target_index_count = std::size_t(IndexCount * details->m_LODs[i].m_LODReduction + 0.005f) / 3 * 3;
-                        const float target_error = 1e-2f;
-                        const auto& Source = (S.m_LODs.size()) ? S.m_LODs.back().m_Indices : Welded;
-
-                        if (Source.size() < target_index_count)
-                            break;
-
-                        auto& NewLod = S.m_LODs.emplace_back();
-                        NewLod.m_ScreenArea = details->m_LODs[i].m_ScreenArea;      // (it stayed unset: 0)
-
-                        NewLod.m_Indices.resize(Source.size());
-                        std::size_t new_size = meshopt_simplify(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], S.m_Vertex.size(), sizeof(vertex), target_index_count, target_error);
-                        NewLod.m_Indices.resize(new_size);
-                        // a LOD that does not cut at least a quarter of the previous one's indices is not worth its memory and draws (the
-                        // simplifier reached its error bound first): dropped, and no coarser one for this submesh
-                        if (new_size > Source.size() * 3 / 4) { S.m_LODs.pop_back(); break; }
-
-                        IndexCount = new_size;
-                    }
+                    for (auto& S : G.m_SubMesh) SimplifyChain(S, details->m_LODs);
+                    m_NameToDetail[G.m_Name] = details;         // (a group: its mesh's details)
+                    Out.push_back(std::move(G));
                 }
             }
+            m_CompilerMesh = std::move(Out);
         }
 
         //--------------------------------------------------------------------------------------
@@ -448,6 +540,8 @@ void ConvertToCompilerMesh(void)
         // halves go on Pending (c2 under c1, so c1 and all it splits into come out first). The world size of c does not split it: each cluster's
         // positions are quantized relative to its own bounds (16 bits over its extent: a precision of extent / 65535, the 1 mm target up to 65.5 units and coarser past it), so a big
         // object is as many clusters as a small one with the same vertices - splitting by world extent made the clusters (the draws) grow with the area
+        static constexpr std::size_t cluster_max_tris_v = 512;     // (SplitCluster)
+
         static void SplitCluster
         ( const std::vector<vertex>&        InputVerts
         , const std::vector<uint32_t>&      InputIndices
@@ -501,7 +595,11 @@ void ConvertToCompilerMesh(void)
                 }
             }
 
-            if ((small_extent && used_verts.size() <= MaxVerts) || single_tri)
+            // At most cluster_max_tris_v triangles (split along the longest position axis): a cluster is what the GPU culls and pairs with a
+            // shadow page whole - with only the vertex cap (64k) one spanned a whole street, and every sun page it touched drew all of it (~1.1M
+            // triangles a page in Bistro, shadows_gpu_plan.md)
+            const bool      too_many        = c.tri_ids.size() > cluster_max_tris_v;
+            if ((small_extent && used_verts.size() <= MaxVerts && !too_many) || single_tri)
             {
                 // Remap verts locally
                 std::vector<uint32_t> new_vert_ids(used_verts.begin(), used_verts.end());
@@ -680,11 +778,12 @@ void ConvertToCompilerMesh(void)
             }
             else
             {
-                // Choose split axis based on max extent
+                // Choose split axis based on max extent (only a position axis when the cluster fits but for its triangle count)
                 float   maxes[5]    = { extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z, extent_uv.m_X, extent_uv.m_Y };
                 int     axis        = 0;
                 float   max_val     = maxes[0];
-                for (int i = 1; i < 5; ++i)
+                const int n_axes    = (small_extent && used_verts.size() <= MaxVerts) ? 3 : 5;
+                for (int i = 1; i < n_axes; ++i)
                 {
                     if (maxes[i] > max_val)
                     {
@@ -864,7 +963,9 @@ void ConvertToCompilerMesh(void)
                 for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level)
                 {
                     geom::lod out_l;
-                    out_l.m_ScreenArea  = (lod_level == 0) ? 1.0f : (itDetail != m_NameToDetail.end() && lod_level - 1 < itDetail->second->m_LODs.size() ? itDetail->second->m_LODs[lod_level - 1].m_ScreenArea : 0.0f);
+                    // its error (object space): the largest of its submeshes' (a LOD group's: GenenateLODs; one with fewer repeats its coarsest)
+                    out_l.m_Error       = 0.0f;
+                    if (lod_level > 0) for (const auto& S : input_mesh.m_SubMesh) if (!S.m_LODs.empty()) out_l.m_Error = std::max(out_l.m_Error, S.m_LODs[std::min(lod_level - 1, S.m_LODs.size() - 1)].m_Error);
                     out_l.m_iSubmesh    = current_submesh_idx;
                     out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
                     OutLODs.push_back(out_l);
@@ -1567,7 +1668,9 @@ void ConvertToCompilerMesh(void)
             // Without the rays first (cheap, and a lower bound: over the limit there is over it in the bake), then the bake's own count
             std::size_t n = M.CountSurfels(R, max_gi_surfels_v, false);
             if (n <= max_gi_surfels_v) n = M.CountSurfels(R, max_gi_surfels_v);
-            if (n <= max_gi_surfels_v)
+            // (a margin: this count is on the mesh before its clean up and quantization, the bake's can be larger - the Bistro counted 61219 here
+            // and passed 65534 in the bake, which then turned its GI off; sections cost little)
+            if (n <= max_gi_surfels_v * 9 / 10)
             {
                 LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} surfels at SurfelSize {} (a mesh can have {})", n, R, max_gi_surfels_v));
                 if (const char* pF = std::getenv("XLION_GI_FORCE_SECTIONS"))      // (tests, measurements: sections of about that many owned surfels)
@@ -1681,7 +1784,8 @@ void ConvertToCompilerMesh(void)
                 m_FinalGeom.m_GIMode = xgeom_static::gi_mode::OFF;
                 return;
             }
-            const auto F = gi::FlattenSections(Ch, m_FinalGeom.m_nVertices);
+            auto F = gi::FlattenSections(Ch, m_FinalGeom.m_nVertices);
+            gi::AssignCoarseClusters(F, M, m_FinalGeom);        // (the coarser LODs' clusters: a section and their vertices' surfels)
             {   // what the sections' packed structures hold (the load-time data), MB
                 double Table = 0, Heads = 0, Lists = 0, Nb = 0, Orig = 0;
                 for (const auto& C : Ch.m_Chunks)
