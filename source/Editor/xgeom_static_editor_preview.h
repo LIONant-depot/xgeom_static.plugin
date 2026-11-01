@@ -123,7 +123,7 @@ namespace xgeom_static_editor::preview
             if (m_bReady) return true;
             m_pDevice = &Device;
             m_Settings.clear();
-            if (!Ok(m_Renderer.Init(Device))) return false;
+            if (!Ok(m_Renderer.Init(Device, xlionrender::instance::setup::Preview()))) return false;      // (a small shadow pool, no probes)
             m_RenderView.m_Background = { 0.45f, 0.45f, 0.45f, 1.0f };     // the grey the preview and the thumbnails always had
             {   // the ground: the unit square in XZ facing up (Render scales it to the geometry), receiving only
                 const auto V = [](float x, float z) { return xlionrender::vertex{ .m_Pos = { x, 0, z }, .m_UV = { x + 0.5f, z + 0.5f }, .m_Color = 0xFFFFFFFFu, .m_Normal = { 0, 1, 0 }, .m_Tangent = { 1, 0, 0, 1 } }; };
