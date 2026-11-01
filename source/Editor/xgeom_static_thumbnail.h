@@ -34,7 +34,7 @@ namespace xgeom_static_editor
         bool Init(xgpu::device& Device) noexcept override
         {
             if (m_bReady) return true;
-            if (!m_Runtime.Init(Device)) return false;
+            if (!m_Runtime.Init(Device, true)) return false;
             m_bReady = true;
             return true;
         }
