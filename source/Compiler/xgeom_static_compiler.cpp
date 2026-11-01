@@ -338,12 +338,18 @@ void ConvertToCompilerMesh(void)
                 for (auto& S : M.m_SubMesh)
                 {
                     std::size_t IndexCount = S.m_Indices.size();
+                    // welded by position first (meshopt_generateShadowIndexBuffer: every vertex at a position becomes its first): the UV and
+                    // normal seams' split vertices kept the simplifier from collapsing anything across them - the LODs came out nearly LOD 0's
+                    // size. The LODs then use those first vertices (their positions exact, their UVs/normals one side's: the shadow pages draw
+                    // positions only; the main view's LODs want an attribute-aware simplify)
+                    std::vector<std::uint32_t> Welded(S.m_Indices.size());
+                    if (!S.m_Indices.empty()) meshopt_generateShadowIndexBuffer(Welded.data(), S.m_Indices.data(), S.m_Indices.size(), &S.m_Vertex[0].m_Position, S.m_Vertex.size(), sizeof(float) * 3, sizeof(vertex));
 
                     for (size_t i = 0; i < details->m_LODs.size(); ++i)
                     {
                         const std::size_t target_index_count = std::size_t(IndexCount * details->m_LODs[i].m_LODReduction + 0.005f) / 3 * 3;
                         const float target_error = 1e-2f;
-                        const auto& Source = (S.m_LODs.size()) ? S.m_LODs.back().m_Indices : S.m_Indices;
+                        const auto& Source = (S.m_LODs.size()) ? S.m_LODs.back().m_Indices : Welded;
 
                         if (Source.size() < target_index_count)
                             break;
