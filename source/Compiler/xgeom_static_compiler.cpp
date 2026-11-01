@@ -360,6 +360,9 @@ void ConvertToCompilerMesh(void)
                         NewLod.m_Indices.resize(Source.size());
                         std::size_t new_size = meshopt_simplify(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], S.m_Vertex.size(), sizeof(vertex), target_index_count, target_error);
                         NewLod.m_Indices.resize(new_size);
+                        // a LOD that does not cut at least a quarter of the previous one's indices is not worth its memory and draws (the
+                        // simplifier reached its error bound first): dropped, and no coarser one for this submesh
+                        if (new_size > Source.size() * 3 / 4) { S.m_LODs.pop_back(); break; }
 
                         IndexCount = new_size;
                     }
