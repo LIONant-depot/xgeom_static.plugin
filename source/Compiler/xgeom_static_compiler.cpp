@@ -320,6 +320,18 @@ void ConvertToCompilerMesh(void)
                     continue;
 
                 auto* details = it->second;
+                // XGEOM_STATIC_LODS=0.5,0.25,...: those LODs (each a fraction of the previous one's indices) for a mesh whose descriptor has
+                // none - an experiment's switch (the shadow pages' LODs, shadows_gpu_plan.md v3) without editing the descriptors
+                if (details->m_LODs.empty())
+                    if (const char* pEnv = std::getenv("XGEOM_STATIC_LODS"); pEnv && *pEnv)
+                        for (const char* q = pEnv; *q; )
+                        {
+                            char* pEnd = nullptr;
+                            const float f = std::strtof(q, &pEnd);
+                            if (pEnd == q) break;
+                            if (f > 0.0f && f < 1.0f) details->m_LODs.push_back({ .m_LODReduction = f, .m_ScreenArea = 0 });
+                            q = *pEnd == ',' ? pEnd + 1 : pEnd;
+                        }
                 if (details->m_LODs.empty())
                     continue;
 
@@ -337,6 +349,7 @@ void ConvertToCompilerMesh(void)
                             break;
 
                         auto& NewLod = S.m_LODs.emplace_back();
+                        NewLod.m_ScreenArea = details->m_LODs[i].m_ScreenArea;      // (it stayed unset: 0)
 
                         NewLod.m_Indices.resize(Source.size());
                         std::size_t new_size = meshopt_simplify(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], S.m_Vertex.size(), sizeof(vertex), target_index_count, target_error);
@@ -829,7 +842,12 @@ void ConvertToCompilerMesh(void)
                 out_m.m_Name[31]        = '\0';
                 out_m.m_WorldPixelSize  = (num_edges > 0) ? total_edge_len / num_edges : 0.0f;
                 out_m.m_BBox            = mesh_bb.to_fbbox();
-                out_m.m_nLODs           = static_cast<uint16_t>(input_mesh.m_SubMesh.empty() ? 1 : input_mesh.m_SubMesh[0].m_LODs.size() + 1);
+                // every LOD a submesh made (submesh 0's count dropped the others' when it stopped early - meshopt reaching its error first);
+                // a submesh with fewer repeats its last one
+                std::size_t nSubLODs = 0;
+                for (const auto& S : input_mesh.m_SubMesh) nSubLODs = std::max(nSubLODs, S.m_LODs.size());
+                const auto  itDetail = m_NameToDetail.find(input_mesh.m_Name);
+                out_m.m_nLODs           = static_cast<uint16_t>(nSubLODs + 1);
                 out_m.m_iLOD            = current_lod_idx;
                 OutMeshes.push_back(out_m);
 
@@ -837,7 +855,7 @@ void ConvertToCompilerMesh(void)
                 for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level)
                 {
                     geom::lod out_l;
-                    out_l.m_ScreenArea  = (lod_level == 0) ? 1.0f : (input_mesh.m_SubMesh.empty() ? 0.0f : input_mesh.m_SubMesh[0].m_LODs[lod_level - 1].m_ScreenArea);
+                    out_l.m_ScreenArea  = (lod_level == 0) ? 1.0f : (itDetail != m_NameToDetail.end() && lod_level - 1 < itDetail->second->m_LODs.size() ? itDetail->second->m_LODs[lod_level - 1].m_ScreenArea : 0.0f);
                     out_l.m_iSubmesh    = current_submesh_idx;
                     out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
                     OutLODs.push_back(out_l);
@@ -849,7 +867,8 @@ void ConvertToCompilerMesh(void)
                         out_sm.m_iMaterial  = static_cast<uint16_t>(input_sm.m_iMaterial);
                         out_sm.m_iCluster   = current_cluster_idx;
 
-                        const std::vector<uint32_t>&  lod_indices     = (lod_level == 0) ? input_sm.m_Indices : ((lod_level - 1 < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level - 1].m_Indices : input_sm.m_Indices);
+                        const std::vector<uint32_t>&  lod_indices     = (lod_level == 0) ? input_sm.m_Indices : ((lod_level - 1 < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level - 1].m_Indices
+                                                                                                                     : input_sm.m_LODs.empty() ? input_sm.m_Indices : input_sm.m_LODs.back().m_Indices);
                         auto                          binormal_signs  = std::vector<float>(input_sm.m_Vertex.size(), 1.0f);
                         for (size_t i = 0; i < input_sm.m_Vertex.size(); ++i)
                         {
