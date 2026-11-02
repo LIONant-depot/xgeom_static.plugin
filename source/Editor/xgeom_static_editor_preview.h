@@ -434,6 +434,8 @@ namespace xgeom_static_editor::preview
                                         : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
             Scene.m_GI.m_Saturation = S.m_GISaturation;
+            Scene.m_Post.m_Bloom = S.m_Bloom;
+            Scene.m_Post.m_bAutoExposure = S.m_bAutoExposure;
             Scene.m_GI.m_bPathTraced = S.m_GIView == render_settings::gi_view::PATH_TRACED;
             Scene.m_GI.m_bShowBlend = true;                 // (the shown GI moves toward the new light: never a jump)
             auto* pHost = xeditor::host::current();                                 // what the foreground leaves of the host's shared GI allowance
