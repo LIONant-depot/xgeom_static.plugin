@@ -905,6 +905,7 @@ void ConvertToCompilerMesh(void)
             std::uint16_t                       current_submesh_idx     = 0;
             std::uint16_t                       current_cluster_idx     = 0;
             float                               max_uv_extent           = target_precision * 65535.0f;     // UV units: 16 bits at target_precision
+            std::vector<const mesh*>            EmitMesh;               // (OutMeshes' sources: their LODs are emitted after, coarsest first)
 
             for (const auto& input_mesh : compiler_meshes)
             {
@@ -960,7 +961,19 @@ void ConvertToCompilerMesh(void)
                 OutMeshes.push_back(out_m);
 
                 current_lod_idx += out_m.m_nLODs;
-                for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level)
+                OutLODs.resize(OutLODs.size() + out_m.m_nLODs);
+                EmitMesh.push_back(&input_mesh);
+            }
+            // The geometry LOD by LOD, the coarsest first, every mesh's at each level: the vertex, index and colour arrays end with LOD 0's
+            // clusters - the geometry's residency (xgeom_static_residency) keeps a prefix on the GPU and drops LOD 0 when it is not wanted
+            std::size_t MaxLODs = 0;
+            for (const auto& m : OutMeshes) MaxLODs = std::max<std::size_t>(MaxLODs, m.m_nLODs);
+            for (std::size_t L = MaxLODs; L-- > 0; )
+            for (std::size_t m = 0; m < OutMeshes.size(); ++m)
+            {
+                if (L >= OutMeshes[m].m_nLODs) continue;
+                const auto&       input_mesh = *EmitMesh[m];
+                const std::size_t lod_level  = L;
                 {
                     geom::lod out_l;
                     // its error (object space): the largest of its submeshes' (a LOD group's: GenenateLODs; one with fewer repeats its coarsest)
@@ -968,7 +981,7 @@ void ConvertToCompilerMesh(void)
                     if (lod_level > 0) for (const auto& S : input_mesh.m_SubMesh) if (!S.m_LODs.empty()) out_l.m_Error = std::max(out_l.m_Error, S.m_LODs[std::min(lod_level - 1, S.m_LODs.size() - 1)].m_Error);
                     out_l.m_iSubmesh    = current_submesh_idx;
                     out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
-                    OutLODs.push_back(out_l);
+                    OutLODs[OutMeshes[m].m_iLOD + lod_level] = out_l;
 
                     current_submesh_idx += out_l.m_nSubmesh;
                     for (const auto& input_sm : input_mesh.m_SubMesh)

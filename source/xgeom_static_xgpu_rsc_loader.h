@@ -18,6 +18,22 @@ namespace xgeom_static::xgpu
     struct geom;
 }
 
+// The geometries' residency (xgeom_static_xgpu_rsc_loader.cpp, geom_streaming_plan.md): the finest LOD their GPU buffers hold (0: all of
+// it). Immediate (the data stays in RAM); the renderer draws nothing finer than what is resident. The manager's thread
+namespace xgeom_static_residency
+{
+    struct stats
+    {
+        int             m_nGeoms    = 0;        // loaded, of every manager
+        int             m_nReduced  = 0;        // holding less than LOD 0
+        std::uint64_t   m_Bytes     = 0;        // vertex streams and indices on the GPU
+        std::uint64_t   m_FullBytes = 0;        // what all of them would be
+    };
+    void    Request     ( xresource::mgr& Mgr, const xresource::full_guid& Guid, int FinestLOD ) noexcept;
+    void    RequestAll  ( xresource::mgr& Mgr, int FinestLOD ) noexcept;
+    stats   getStats    ( const xresource::mgr& Mgr ) noexcept;
+}
+
 // Now we specify the loader and we must fill in all the information
 template<>
 struct xresource::loader< xrsc::geom_static_type_guid_v >

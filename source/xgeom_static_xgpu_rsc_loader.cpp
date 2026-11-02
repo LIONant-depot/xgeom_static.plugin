@@ -2,6 +2,7 @@
 #include "xgeom_static_xgpu_rsc_loader.h"
 
 #include "dependencies/xresource_guid/source/bridges/xresource_xproperty_bridge.h"
+#include <mutex>
 
 //
 // We will register the loader, the properties, 
@@ -25,6 +26,116 @@ std::size_t MakeMuultipleOf64(const T& X)
     return X.size();
     auto s = sizeof(X[0]);
     return MultipleOf64(s * X.size())/ s;
+}
+
+//------------------------------------------------------------------
+// Residency (geom_streaming_plan.md; the textures' pattern: xtexture_residency). The compiler emits the LODs coarsest first, so the
+// vertex, index, colour and UV1 arrays end with LOD 0's clusters: the GPU buffers hold the prefix down to the finest LOD wanted. The
+// geometry's data stays in RAM (the GI's CPU structures read LOD 0: plan option a), so a change is immediate - new buffers from it
+// replacing the old ones (the device's deferred destroy). The renderer finds what is resident from the index buffer's size
+// (xlionrender::cluster_geom::Refresh). Requests from scripts (GeomResidency) and XGEOM_STATIC_FINEST_LOD; by distance later (as P4).
+//------------------------------------------------------------------
+namespace
+{
+    struct geom_residency
+    {
+        xgeom_static::xgpu::geom*   m_pGeom     = nullptr;
+        xresource::full_guid        m_Guid      = {};
+        int                         m_Finest    = 0;        // the finest LOD resident
+    };
+    struct geom_residency_state
+    {
+        std::mutex                  m_Lock;
+        std::vector<geom_residency> m_Geoms;
+    };
+    inline geom_residency_state s_GeomResidency;
+
+    // The prefix (vertices, indices) holding every LOD from Finest on (a mesh with fewer: its coarsest)
+    std::pair<std::size_t, std::size_t> GeomPrefixFor(const xgeom_static::geom& G, int Finest) noexcept
+    {
+        std::size_t nV = 0, nI = 0;
+        for (const auto& M : G.getMeshes())
+            for (int k = std::min(Finest, int(M.m_nLODs) - 1); k < int(M.m_nLODs); ++k)
+            {
+                const auto& L = G.getLODs()[M.m_iLOD + k];
+                for (const auto& S : G.getSubmeshes().subspan(L.m_iSubmesh, L.m_nSubmesh))
+                    for (std::uint32_t c = S.m_iCluster; c < std::uint32_t(S.m_iCluster) + S.m_nCluster && c < G.getClusters().size(); ++c)
+                    {
+                        const auto& C = G.getClusters()[c];
+                        nV = std::max<std::size_t>(nV, std::size_t(C.m_iVertex) + C.m_nVertices);
+                        nI = std::max<std::size_t>(nI, std::size_t(C.m_iIndex) + C.m_nIndices);
+                    }
+            }
+        return { nV, nI };
+    }
+
+    // The vertex streams and the indices for the prefix (the cluster data: all of it, small)
+    xgpu::device::error* MakeGeomStreams(xgpu::device& Device, xgeom_static::xgpu::geom& G, std::size_t nV, std::size_t nI) noexcept
+    {
+        const auto One = [&](xgpu::buffer& Out, xgpu::buffer::type Type, int Size, std::size_t n, const void* pData, const char* pName) -> xgpu::device::error*
+        {
+            if (n == 0) return nullptr;
+            xgpu::buffer B;
+            if (auto Err = Device.Create(B, xgpu::buffer::setup{ .m_Type = Type, .m_EntryByteSize = Size, .m_EntryCount = int(n), .m_pData = const_cast<void*>(pData), .m_pName = pName }); Err) return Err;
+            Out.m_Private.swap(B.m_Private);        // (the old buffer: B's destructor, through the deferred destroy - a frame in flight may still read it)
+            return nullptr;
+        };
+        xgpu::device::error* p = nullptr;
+        0
+        || (p = One(G.VertexBuffer(),       xgpu::buffer::type::VERTEX, int(sizeof(xgeom_static::geom::vertex)),        nV, G.getVertices().data(),     "Geometry: vertices"))
+        || (p = One(G.VertexExtrasBuffer(), xgpu::buffer::type::VERTEX, int(sizeof(xgeom_static::geom::vertex_extras)), nV, G.getVertexExtras().data(), "Geometry: vertex extras"))
+        || (p = One(G.IndexBuffer(),        xgpu::buffer::type::INDEX,  int(sizeof(std::uint16_t)),                     nI, G.getIndices().data(),      "Geometry: indices"))
+        || (p = One(G.ColorBuffer(),        xgpu::buffer::type::VERTEX, int(sizeof(std::uint32_t)),                     G.getVertexColors().empty() ? 0 : nV, G.getVertexColors().data(), "Geometry: colours"))
+        || (p = One(G.UV1Buffer(),          xgpu::buffer::type::VERTEX, int(sizeof(G.getUV1s()[0])),                    G.getUV1s().empty() ? 0 : nV, G.getUV1s().data(), "Geometry: uv1"))
+        ;
+        return p;
+    }
+
+    // Finest wanted on the GPU (clamped to what saves anything: a geometry whose LOD 0 is not a suffix keeps it all)
+    void ApplyGeomResidency(xgpu::device& Device, geom_residency& R, int Finest) noexcept
+    {
+        auto& G = *R.m_pGeom;
+        int nLODs = 1;
+        for (const auto& M : G.getMeshes()) nLODs = std::max(nLODs, int(M.m_nLODs));
+        Finest = std::clamp(Finest, 0, nLODs - 1);
+        auto [nV, nI] = GeomPrefixFor(G, Finest);
+        if (Finest > 0 && nI >= G.getIndices().size()) { Finest = 0; nV = G.getVertices().size(); nI = G.getIndices().size(); }      // (LOD 0 not last: an older compile)
+        if (Finest == R.m_Finest && G.IndexBuffer().m_Private && std::size_t(G.IndexBuffer().getEntryCount()) == nI) return;
+        if (MakeGeomStreams(Device, G, nV, nI) == nullptr) R.m_Finest = Finest;
+    }
+}
+
+namespace xgeom_static_residency
+{
+    void Request(xresource::mgr& Mgr, const xresource::full_guid& Guid, int FinestLOD) noexcept
+    {
+        auto& Device = Mgr.getUserData<resource_mgr_user_data>().m_Device;
+        std::lock_guard Lk(s_GeomResidency.m_Lock);
+        for (auto& R : s_GeomResidency.m_Geoms) if (R.m_Guid == Guid) ApplyGeomResidency(Device, R, FinestLOD);
+    }
+    void RequestAll(xresource::mgr& Mgr, int FinestLOD) noexcept
+    {
+        auto& Device = Mgr.getUserData<resource_mgr_user_data>().m_Device;
+        std::lock_guard Lk(s_GeomResidency.m_Lock);
+        for (auto& R : s_GeomResidency.m_Geoms) ApplyGeomResidency(Device, R, FinestLOD);
+    }
+    stats getStats(const xresource::mgr&) noexcept
+    {
+        stats S;
+        std::lock_guard Lk(s_GeomResidency.m_Lock);
+        for (const auto& R : s_GeomResidency.m_Geoms)
+        {
+            const auto& G = *R.m_pGeom;
+            const std::size_t PerVertex = sizeof(xgeom_static::geom::vertex) + sizeof(xgeom_static::geom::vertex_extras) + (G.getVertexColors().empty() ? 0 : 4) + (G.getUV1s().empty() ? 0 : sizeof(G.getUV1s()[0]));
+            const auto Bytes = [&](std::size_t nV, std::size_t nI) { return std::uint64_t(nV * PerVertex + nI * sizeof(std::uint16_t)); };
+            const auto [nV, nI] = GeomPrefixFor(G, R.m_Finest);
+            ++S.m_nGeoms;
+            S.m_nReduced  += R.m_Finest > 0;
+            S.m_FullBytes += Bytes(G.getVertices().size(), G.getIndices().size());
+            S.m_Bytes     += R.m_Finest > 0 ? Bytes(nV, nI) : Bytes(G.getVertices().size(), G.getIndices().size());
+        }
+        return S;
+    }
 }
 
 //------------------------------------------------------------------
@@ -67,6 +178,14 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
     ||(pXGPUGeom->getUV1s().size() && (p = UserData.m_Device.Create(pXGPUGeom->UV1Buffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(pXGPUGeom->getUV1s()[0]), .m_EntryCount = (int)pXGPUGeom->getUV1s().size(), .m_pData = pXGPUGeom->getUV1s().data(), .m_pName = "Geometry: uv1"})))
     ;
     assert(p == nullptr);
+
+    // Its residency (the GPU's prefix: XGEOM_STATIC_FINEST_LOD - a test's or a low-memory run's - else all of it)
+    {
+        static const int s_Finest = [] { const char* p = std::getenv("XGEOM_STATIC_FINEST_LOD"); return p ? std::max(0, std::atoi(p)) : 0; }();
+        std::lock_guard Lk(s_GeomResidency.m_Lock);
+        auto& R = s_GeomResidency.m_Geoms.emplace_back(geom_residency{ pXGPUGeom, GUID, 0 });
+        if (s_Finest > 0) ApplyGeomResidency(UserData.m_Device, R, s_Finest);
+    }
 
     // Resolve the default material instances. A referenced material instance that fails to load
     // (missing/uncompiled itself, or a broken dependency of its own) is the same expected,
@@ -125,6 +244,10 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
 void xresource::loader< xrsc::geom_static_type_guid_v >::Destroy(xresource::mgr& Mgr, data_type&& Data, const full_guid& GUID)
 {
     auto& UserData = Mgr.getUserData<resource_mgr_user_data>();
+    {
+        std::lock_guard Lk(s_GeomResidency.m_Lock);
+        std::erase_if(s_GeomResidency.m_Geoms, [&](const geom_residency& R) { return R.m_pGeom == &Data; });
+    }
 
     // Release all the buffers. They live in the geom's raw runtime memory, which is freed below without running destructors, and
     // xgpu::buffer has no move: Destroy(std::move(B)) queued a copy and left B's reference behind, so all four leaked. Taking the
