@@ -74,9 +74,9 @@ namespace xgeom_static_editor
         float               m_ShadowDetailDistance = 2.0f;      // the sun's shadow levels: how many times farther each keeps its detail
         float               m_ShadowLevelBlend     = 0.95f;     // ... the share of a level that blends into the next
         float               m_SunSourceAngle       = 0.4f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
-        float               m_Bloom                = 0.0f;      // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
-        bool                m_bAutoExposure        = false;     // the frame's exposure follows what it sees
-        bool                m_bTAA                 = false;     // temporal antialiasing
+        float               m_Bloom                = 0.04f;     // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
+        bool                m_bAutoExposure        = true;      // the frame's exposure follows what it sees
+        bool                m_bTAA                 = true;      // temporal antialiasing
         int                 m_SunDiscTaps          = 4;         // ... its soft edge's samples a pixel (fewer: cheaper, coarser)
         bool                m_bWireFrame;
         bool                m_bTangents;
