@@ -430,7 +430,7 @@ namespace xgeom_static_editor::preview
                 using dbg = xlionrender::gi_debug;
                 Scene.m_GI = { .m_bEnable = true, .m_RayBudget = 1 << 16
                              , .m_Debug = S.m_GIView == render_settings::gi_view::SURFELS       ? dbg::SURFELS
-                                        : S.m_GIView == render_settings::gi_view::LIGHT         ? dbg::LIGHT
+                                        : S.m_GIView == render_settings::gi_view::LIGHT || S.m_GIView == render_settings::gi_view::PATH_TRACED_LIGHT ? dbg::LIGHT
                                         : S.m_GIView == render_settings::gi_view::SURFACE_COLOR ? dbg::SURFACE_COLOR
                                         : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
@@ -441,7 +441,7 @@ namespace xgeom_static_editor::preview
             Scene.m_ReflectionMaxRoughness = S.m_ReflectionRoughness;
             Scene.m_bReflectionScreen = S.m_bReflectionScreen;
             if (const char* p = std::getenv("XLION_REFL")) { int Sc = 0; (void)std::sscanf(p, "%f %d", &Scene.m_ReflectionMaxRoughness, &Sc); Scene.m_bReflectionScreen = Sc != 0; }      // (measurement)
-            Scene.m_GI.m_bPathTraced = S.m_GIView == render_settings::gi_view::PATH_TRACED;
+            Scene.m_GI.m_bPathTraced = S.m_GIView == render_settings::gi_view::PATH_TRACED || S.m_GIView == render_settings::gi_view::PATH_TRACED_LIGHT;
             Scene.m_GI.m_bShowBlend = true;                 // (the shown GI moves toward the new light: never a jump)
             auto* pHost = xeditor::host::current();                                 // what the foreground leaves of the host's shared GI allowance
             if (pHost) Scene.m_GI.m_TraceAllowanceMs = pHost->m_GIAllowance.Grant(false);

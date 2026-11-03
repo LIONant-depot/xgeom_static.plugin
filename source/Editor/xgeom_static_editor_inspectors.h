@@ -74,21 +74,22 @@ namespace xgeom_static_editor
         float               m_ShadowDetailDistance = 2.0f;      // the sun's shadow levels: how many times farther each keeps its detail
         float               m_ShadowLevelBlend     = 0.95f;     // ... the share of a level that blends into the next
         float               m_SunSourceAngle       = 0.4f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
-        float               m_Bloom                = 0.04f;     // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
-        bool                m_bAutoExposure        = true;      // the frame's exposure follows what it sees
+        float               m_Bloom                = 0.0f;      // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
+        bool                m_bAutoExposure        = false;     // the frame's exposure follows what it sees
         float               m_ReflectionRoughness  = 0.0f;      // the traced reflections: receivers up to this roughness (0: the probes alone)
-        bool                m_bReflectionScreen    = true;      // the screen's reflections over the probes
-        bool                m_bTAA                 = true;      // temporal antialiasing
+        bool                m_bReflectionScreen    = false;     // the screen's reflections over the probes
+        bool                m_bTAA                 = false;     // temporal antialiasing
         int                 m_SunDiscTaps          = 4;         // ... its soft edge's samples a pixel (fewer: cheaper, coarser)
         bool                m_bWireFrame;
         bool                m_bTangents;
         bool                m_bBinormals;
         bool                m_bNormals;
-        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR, COVERAGE, PATH_TRACED };
+        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR, COVERAGE, PATH_TRACED, PATH_TRACED_LIGHT };
         static constexpr auto gi_view_v = std::array
         { xproperty::settings::enum_item("OFF",     gi_view::OFF,     "No GI: the key light and the flat fill only")
         , xproperty::settings::enum_item("GI",      gi_view::GI,      "Lit with the GI of the geometry's own surfels (the sky and the key light bounce)")
         , xproperty::settings::enum_item("PATH_TRACED", gi_view::PATH_TRACED, "Debugging: the indirect light from a brute path tracer instead of the surfels, the ground truth to judge the GI against. It converges while the camera and the lights hold still, and it is slow")
+        , xproperty::settings::enum_item("PATH_TRACED_LIGHT", gi_view::PATH_TRACED_LIGHT, "Debugging: the brute path tracer's indirect light alone: no textures, no direct light. LIGHT's reference")
         , xproperty::settings::enum_item("SURFELS", gi_view::SURFELS, "Every pixel in the color of the surfel it reads most: the surfels' placement and reach (black: no surfel reaches it)")
         , xproperty::settings::enum_item("LIGHT",   gi_view::LIGHT,   "The GI light alone: no textures, no direct light")
         , xproperty::settings::enum_item("SURFACE_COLOR", gi_view::SURFACE_COLOR, "Every pixel in the surface color of the surfel it reads most (the material capture): the color the GI bounces")
