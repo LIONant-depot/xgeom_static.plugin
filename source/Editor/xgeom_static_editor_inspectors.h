@@ -75,6 +75,8 @@ namespace xgeom_static_editor
         float               m_ShadowLevelBlend     = 0.95f;     // ... the share of a level that blends into the next
         float               m_SunSourceAngle       = 0.4f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
         float               m_Bloom                = 0.0f;      // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
+        float               m_BloomThreshold       = 1.0f;      // the exposed light where the bloom starts (1: white)
+        float               m_BloomSpread          = 0.5f;      // 0 tight around the light .. 1 wide
         bool                m_bAutoExposure        = false;     // the frame's exposure follows what it sees
         float               m_ReflectionRoughness  = 0.0f;      // the traced reflections: receivers up to this roughness (0: the probes alone)
         bool                m_bReflectionScreen    = false;     // the screen's reflections over the probes
@@ -117,6 +119,8 @@ namespace xgeom_static_editor
             , obj_member<"ShadowDetailDistance", &render_settings::m_ShadowDetailDistance, member_help<"How far the sharp shadow levels reach: each level switches to the next coarser one this many times farther away (more shadow pages). 1: the minimum detail">>
             , obj_member<"SunSourceAngle",     &render_settings::m_SunSourceAngle, member_help<"The sun's disc, degrees across (the real sun: about 0.53): shadows sharp where the caster touches, softer with the distance to it. 0: hard shadows">>
             , obj_member<"Bloom",              &render_settings::m_Bloom, member_help<"How much of the blurred bright image goes in the final one: 0 off, 0.04 is usual">>
+            , obj_member<"BloomThreshold",     &render_settings::m_BloomThreshold, member_help<"Only exposed light above this blooms: 1 is white, 0.18 middle grey. What is under it stays sharp">>
+            , obj_member<"BloomSpread",        &render_settings::m_BloomSpread, member_help<"The glow: 0 tight around the light, 1 wide">>
             , obj_member<"AutoExposure",       &render_settings::m_bAutoExposure, member_help<"The exposure follows what the view sees, like an eye adapting">>
             , obj_member<"ReflectionRoughness", &render_settings::m_ReflectionRoughness, member_help<"Traced reflections on surfaces up to this roughness (0 off; rays through the GI's geometry)">>
             , obj_member<"ReflectionScreen",   &render_settings::m_bReflectionScreen, member_help<"Reflect what is on screen, over the probes">>

@@ -436,6 +436,8 @@ namespace xgeom_static_editor::preview
             }
             Scene.m_GI.m_Saturation = S.m_GISaturation;
             Scene.m_Post.m_Bloom = S.m_Bloom;
+            Scene.m_Post.m_BloomThreshold = S.m_BloomThreshold;
+            Scene.m_Post.m_BloomSpread = S.m_BloomSpread;
             Scene.m_Post.m_bAutoExposure = S.m_bAutoExposure;
             Scene.m_Post.m_bTAA = S.m_bTAA;
             Scene.m_ReflectionMaxRoughness = S.m_ReflectionRoughness;
