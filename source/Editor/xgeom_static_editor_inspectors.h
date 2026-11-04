@@ -74,9 +74,9 @@ namespace xgeom_static_editor
         float               m_ShadowDetailDistance = 2.0f;      // the sun's shadow levels: how many times farther each keeps its detail
         float               m_ShadowLevelBlend     = 0.95f;     // ... the share of a level that blends into the next
         float               m_SunSourceAngle       = 0.4f;      // the sun's disc, degrees (its shadows' softness with the distance to the caster; 0: hard)
-        float               m_Bloom                = 0.0f;      // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
-        float               m_BloomThreshold       = 1.0f;      // the exposed light where the bloom starts (1: white)
-        float               m_BloomSpread          = 0.5f;      // 0 tight around the light .. 1 wide
+        float               m_Bloom                = 0.2f;      // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
+        float               m_BloomThreshold       = 0.99f;      // the exposed light where the bloom starts (1: white)
+        float               m_BloomSpread          = 0.7f;      // 0 tight around the light .. 1 wide
         bool                m_bAutoExposure        = false;     // the frame's exposure follows what it sees
         float               m_ReflectionRoughness  = 0.0f;      // the traced reflections: receivers up to this roughness (0: the probes alone)
         bool                m_bReflectionScreen    = false;     // the screen's reflections over the probes
