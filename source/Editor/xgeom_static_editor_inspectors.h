@@ -79,7 +79,7 @@ namespace xgeom_static_editor
         float               m_BloomSpread          = 0.7f;      // 0 tight around the light .. 1 wide
         bool                m_bAutoExposure        = true;      // the frame's exposure follows what it sees
         float               m_ReflectionRoughness  = 0.0f;      // the traced reflections: receivers up to this roughness (0: the probes alone)
-        bool                m_bReflectionScreen    = false;     // the screen's reflections over the probes
+        bool                m_bReflectionScreen    = false;     // the screen's reflections first: rays only where it has no certain answer
         bool                m_bReflectionFixedRays = false;     // the rays along the mirror direction, not over the rough lobe
         bool                m_bTAA                 = true;      // temporal antialiasing
         int                 m_SunDiscTaps          = 4;         // ... its soft edge's samples a pixel (fewer: cheaper, coarser)
@@ -126,7 +126,7 @@ namespace xgeom_static_editor
             , obj_member<"BloomSpread",        &render_settings::m_BloomSpread, member_help<"The glow: 0 tight around the light, 1 wide">>
             , obj_member<"AutoExposure",       &render_settings::m_bAutoExposure, member_help<"The exposure follows what the view sees, like an eye adapting">>
             , obj_member<"ReflectionRoughness", &render_settings::m_ReflectionRoughness, member_help<"Traced reflections on surfaces up to this roughness (0 off; rays through the GI's geometry)">>
-            , obj_member<"ReflectionScreen",   &render_settings::m_bReflectionScreen, member_help<"Reflect what is on screen, over the probes">>
+            , obj_member<"ReflectionScreen",   &render_settings::m_bReflectionScreen, member_help<"Reflect what is on screen first: rays only where the screen has no certain answer">>
             , obj_member<"ReflectionFixedRays", &render_settings::m_bReflectionFixedRays, member_help<"An open choice: reflection rays along the mirror direction, not over the rough lobe. About 1 ms cheaper and steadier, but too sharp on slightly rough surfaces (no blur yet), and it shows bright stripes still being investigated">>
             , obj_member<"TAA",                &render_settings::m_bTAA, member_help<"Temporal antialiasing: the view jitters a sub-pixel a frame, the frames are averaged">>
             , obj_member<"SunDiscTaps",        &render_settings::m_SunDiscTaps, member_help<"The soft shadow edge's samples a pixel (with a SunSourceAngle): 4 the default; fewer is cheaper and coarser (1-16)">>
