@@ -77,10 +77,10 @@ namespace xgeom_static_editor
         float               m_Bloom                = 0.2f;      // the frame's bloom (scene::post_settings: 0 off, 0.04 usual)
         float               m_BloomThreshold       = 0.99f;      // the exposed light where the bloom starts (1: white)
         float               m_BloomSpread          = 0.7f;      // 0 tight around the light .. 1 wide
-        bool                m_bAutoExposure        = false;     // the frame's exposure follows what it sees
+        bool                m_bAutoExposure        = true;      // the frame's exposure follows what it sees
         float               m_ReflectionRoughness  = 0.0f;      // the traced reflections: receivers up to this roughness (0: the probes alone)
         bool                m_bReflectionScreen    = false;     // the screen's reflections over the probes
-        bool                m_bTAA                 = false;     // temporal antialiasing
+        bool                m_bTAA                 = true;      // temporal antialiasing
         int                 m_SunDiscTaps          = 4;         // ... its soft edge's samples a pixel (fewer: cheaper, coarser)
         bool                m_bWireFrame;
         bool                m_bTangents;
