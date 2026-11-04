@@ -411,6 +411,17 @@ namespace xgeom_static_editor::preview
                     const auto TG0 = clk::now();      // (measurement: the load's steps, on this thread)
                     xlionrender::gi::surfel_mesh Surfels;
                     xlionrender::gi::FromXGeomStatic(Surfels, Geom);
+                    if (const char* pSdf = std::getenv("XLION_SDF"); pSdf && std::atoi(pSdf) >= 11)      // (the gate, before the compiler keeps it: reflections_sdf_plan)
+                    {
+                        namespace sb = xlionrender::gi::sdf_bake;
+                        std::vector<sb::v3f> P; P.reserve(Surfels.m_Pos.size());
+                        for (const auto& V : Surfels.m_Pos) P.push_back({ V.m_X, V.m_Y, V.m_Z });
+                        std::vector<std::array<std::uint32_t, 3>> T; T.reserve(Surfels.m_Tris.size());
+                        for (const auto& t : Surfels.m_Tris) T.push_back({ std::uint32_t(t[0]), std::uint32_t(t[1]), std::uint32_t(t[2]) });
+                        const auto L = sb::BakeLevel(std::span<const sb::v3f>(P), std::span<const std::array<std::uint32_t, 3>>(T), 0.2f, [](std::size_t n, auto&& F) { xlionrender::gi::ParallelFor(int(n), [&](int i) { F(std::size_t(i)); }); });
+                        (void)m_Renderer.SetBakedSdf(L);
+                        std::printf("SDFBAKE %.1f s, %zu bricks, %.1f MB\n", PMs(TG0, clk::now()) / 1000.0, L.m_Bytes.size() / 512, double(L.m_Bytes.size() + L.m_Table.size() * 4) / (1024.0 * 1024.0));
+                    }
                     const auto TG1 = clk::now();
                     if (!Geom.getGISections().empty())        // over one GI mesh's cap: its sections (xLIONRender gi_chunks_plan.md)
                     {
