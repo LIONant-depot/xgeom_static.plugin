@@ -252,7 +252,7 @@ namespace xgeom_static_editor::preview
                 }
                 if (!bTextures || Textures.empty()) { UseDefaultMaterial(); continue; }
 
-                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable))) UseDefaultMaterial();
+                if (!Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), pMI->m_LayoutHash == pMat->m_LayoutHash ? std::span<const float>{ pMI->m_pParams, pMI->m_BlockBytes / 4u } : std::span<const float>{ pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable))) UseDefaultMaterial();
                 else if (pMat->getShaderTile().m_Private) (void)m_Renderer.SetMaterialTile(m_Materials[Index], pMat->getShaderTile());
                 if (pMat->getShaderGBuffer().m_Private) (void)m_Renderer.SetMaterialGBuffer(m_Materials[Index], pMat->getShaderGBuffer());     // (xLIONRender's screen tail: its thin G-buffer)
             }
