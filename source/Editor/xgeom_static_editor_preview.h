@@ -435,6 +435,7 @@ namespace xgeom_static_editor::preview
                                         : S.m_GIView == render_settings::gi_view::COVERAGE      ? dbg::COVERAGE : dbg::NONE };
             }
             Scene.m_GI.m_Saturation = S.m_GISaturation;
+            Scene.m_bDebugReflection = S.m_GIView == render_settings::gi_view::REFLECTIONS;
             Scene.m_Post.m_Bloom = S.m_Bloom;
             Scene.m_Post.m_BloomThreshold = S.m_BloomThreshold;
             Scene.m_Post.m_BloomSpread = S.m_BloomSpread;
