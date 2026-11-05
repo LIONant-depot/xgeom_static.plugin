@@ -475,6 +475,16 @@ namespace xgeom_static_editor::preview
             if (const xgpu::texture* pEnv = m_EnvRef.empty() ? nullptr : xresource::g_Mgr.getResource(m_EnvRef); pEnv && pEnv->isCubemap())
                 Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
+            // (measurement, XLION_PROBE_GRID=<spacing>, 0: one probe over the whole geometry: grading rendered probes without a level. A preview has none otherwise; the nearest 32 are resident)
+            if (static const char* s_pGrid = std::getenv("XLION_PROBE_GRID"); s_pGrid)
+            {
+                const float         Sp = float(std::atof(s_pGrid));
+                const xmath::fvec3  Lo = Geom.m_BBox.m_Min, Hi = Geom.m_BBox.m_Max;
+                if (Sp <= 0.0f) Scene.m_Probes.push_back({ .m_Position = (Lo + Hi) * 0.5f, .m_BoxMin = Lo, .m_BoxMax = Hi, .m_Blend = 0.0f });
+                else for (float x = Lo.m_X + Sp * 0.5f; x < Hi.m_X; x += Sp) for (float z = Lo.m_Z + Sp * 0.5f; z < Hi.m_Z; z += Sp)
+                    Scene.m_Probes.push_back({ .m_Position = { x, Lo.m_Y + 2.0f, z }, .m_BoxMin = { x - Sp * 0.5f - 0.5f, Lo.m_Y, z - Sp * 0.5f - 0.5f }, .m_BoxMax = { x + Sp * 0.5f + 0.5f, Hi.m_Y, z + Sp * 0.5f + 0.5f }, .m_Blend = 0.5f });
+            }
+
             const auto TP1 = clk::now();
             m_Renderer.Render(Window, Scene, m_RenderView, S.m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom); });
             if (pHost && Scene.m_GI.m_bEnable) pHost->m_GIAllowance.Used(float(m_Renderer.getGIStats().m_UpdateGIMs), false);
