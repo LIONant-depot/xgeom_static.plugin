@@ -1361,10 +1361,27 @@ void ConvertToCompilerMesh(void)
                 FILE* pF = std::fopen("gi_autopsy.txt", "a");
                 const auto Stage = [&](const char* pName, std::size_t Count)
                 {
+                    // the process memory: working set, its peak, committed (Linux: /proc/self/status VmRSS, VmHWM, VmData)
+                    double WorkingSet = 0, Peak = 0, Committed = 0;
+                #if defined(_WIN32)
                     PROCESS_MEMORY_COUNTERS_EX M{}; M.cb = sizeof(M);
                     GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&M), sizeof(M));
+                    WorkingSet = double(M.WorkingSetSize); Peak = double(M.PeakWorkingSetSize); Committed = double(M.PrivateUsage);
+                #else
+                    if (FILE* pS = std::fopen("/proc/self/status", "r"))
+                    {
+                        char Buf[256]; unsigned long long kB = 0;
+                        while (std::fgets(Buf, sizeof(Buf), pS))
+                        {
+                            if      (std::sscanf(Buf, "VmRSS: %llu", &kB) == 1) WorkingSet = kB * 1024.0;
+                            else if (std::sscanf(Buf, "VmHWM: %llu", &kB) == 1) Peak       = kB * 1024.0;
+                            else if (std::sscanf(Buf, "VmData: %llu", &kB) == 1) Committed = kB * 1024.0;
+                        }
+                        std::fclose(pS);
+                    }
+                #endif
                     const auto Line = std::format("AUTOPSY {:7.1f} s  {:<28} count {:>12}  working set {:7.0f} MB  peak {:7.0f} MB  committed {:7.0f} MB\n",
-                        std::chrono::duration<double>(clock::now() - T0).count(), pName, Count, M.WorkingSetSize / 1048576.0, M.PeakWorkingSetSize / 1048576.0, M.PrivateUsage / 1048576.0);
+                        std::chrono::duration<double>(clock::now() - T0).count(), pName, Count, WorkingSet / 1048576.0, Peak / 1048576.0, Committed / 1048576.0);
                     LogMessage(xresource_pipeline::msg_type::INFO, Line);
                     if (pF) { std::fputs(Line.c_str(), pF); std::fflush(pF); }
                 };
