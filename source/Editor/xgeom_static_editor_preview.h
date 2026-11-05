@@ -479,10 +479,19 @@ namespace xgeom_static_editor::preview
             if (static const char* s_pGrid = std::getenv("XLION_PROBE_GRID"); s_pGrid)
             {
                 const float         Sp = float(std::atof(s_pGrid));
+                static const float  s_ProbeY = [] { const char* p = std::getenv("XLION_PROBE_Y"); return p ? float(std::atof(p)) : 1.6f; }();      // (standing height in the level's units: the bounds' floor can be far under the street, Bistro's is 4.7 under it; the box's floor 1.7 below)
                 const xmath::fvec3  Lo = Geom.m_BBox.m_Min, Hi = Geom.m_BBox.m_Max;
                 if (Sp <= 0.0f) Scene.m_Probes.push_back({ .m_Position = (Lo + Hi) * 0.5f, .m_BoxMin = Lo, .m_BoxMax = Hi, .m_Blend = 0.0f });
                 else for (float x = Lo.m_X + Sp * 0.5f; x < Hi.m_X; x += Sp) for (float z = Lo.m_Z + Sp * 0.5f; z < Hi.m_Z; z += Sp)
-                    Scene.m_Probes.push_back({ .m_Position = { x, Lo.m_Y + 2.0f, z }, .m_BoxMin = { x - Sp * 0.5f - 0.5f, Lo.m_Y, z - Sp * 0.5f - 0.5f }, .m_BoxMax = { x + Sp * 0.5f + 0.5f, Hi.m_Y, z + Sp * 0.5f + 0.5f }, .m_Blend = 0.5f });
+                    Scene.m_Probes.push_back({ .m_Position = { x, s_ProbeY, z }, .m_BoxMin = { x - Sp * 0.5f - 0.5f, s_ProbeY - 1.7f, z - Sp * 0.5f - 0.5f }, .m_BoxMax = { x + Sp * 0.5f + 0.5f, Hi.m_Y, z + Sp * 0.5f + 0.5f }, .m_Blend = 0.5f });
+            }
+
+            // (measurement, XLION_TEST_SPOT="x y z dx dy dz radius intensity": a strong orange spot outside the GI, the worst case for a store filled by GI rays; XLION_TEST_SPOT_GI: in the GI, for the reference)
+            if (static const char* s_pSpot = std::getenv("XLION_TEST_SPOT"); s_pSpot)
+            {
+                float V[8] = {};
+                if (std::sscanf(s_pSpot, "%f %f %f %f %f %f %f %f", &V[0], &V[1], &V[2], &V[3], &V[4], &V[5], &V[6], &V[7]) == 8)
+                    Scene.m_LocalLights.push_back({ .m_Type = xlionrender::local_light::type::SPOT, .m_Position = { V[0], V[1], V[2] }, .m_Direction = xmath::fvec3{ V[3], V[4], V[5] }.NormalizeCopy(), .m_Radius = V[6], .m_InnerAngle = 0.5f, .m_OuterAngle = 0.7f, .m_Color = { 1.0f, 0.45f, 0.1f }, .m_Intensity = V[7], .m_bCastShadows = true, .m_bGI = std::getenv("XLION_TEST_SPOT_GI") != nullptr, .m_Handle = 0x5907 });
             }
 
             const auto TP1 = clk::now();
