@@ -87,7 +87,7 @@ namespace xgeom_static_editor
         bool                m_bTangents;
         bool                m_bBinormals;
         bool                m_bNormals;
-        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR, COVERAGE, PATH_TRACED, PATH_TRACED_LIGHT, REFLECTIONS, REFLECTIONS_MIRROR };
+        enum class gi_view : std::uint8_t { OFF, GI, SURFELS, LIGHT, SURFACE_COLOR, COVERAGE, PATH_TRACED, PATH_TRACED_LIGHT, REFLECTIONS, REFLECTIONS_MIRROR, REFLECTIONS_MIRROR_PATH_TRACED };
         static constexpr auto gi_view_v = std::array
         { xproperty::settings::enum_item("OFF",     gi_view::OFF,     "No GI: the key light and the flat fill only")
         , xproperty::settings::enum_item("GI",      gi_view::GI,      "Lit with the GI of the geometry's own surfels (the sky and the key light bounce)")
@@ -97,6 +97,7 @@ namespace xgeom_static_editor
         , xproperty::settings::enum_item("LIGHT",   gi_view::LIGHT,   "The GI light alone: no textures, no direct light")
         , xproperty::settings::enum_item("REFLECTIONS", gi_view::REFLECTIONS, "The reflections alone: what the environment, the probes and the traced reflections add, Fresnel included. No diffuse, no direct light, no highlight of the sun. ReflectionScreen does nothing here: it reads the last image, which would be this one")
         , xproperty::settings::enum_item("REFLECTIONS_MIRROR", gi_view::REFLECTIONS_MIRROR, "The reflections with every material a perfect flat mirror (no normal map, no color, roughness 0, as Unreal's Reflections view): what each surface has to reflect")
+        , xproperty::settings::enum_item("REFLECTIONS_MIRROR_PATH_TRACED", gi_view::REFLECTIONS_MIRROR_PATH_TRACED, "Debugging: REFLECTIONS_MIRROR's ground truth from the brute path tracer: what each surface really reflects, to judge the mirror view against. It converges while the camera and the lights hold still, and it is slow")
         , xproperty::settings::enum_item("SURFACE_COLOR", gi_view::SURFACE_COLOR, "Every pixel in the surface color of the surfel it reads most (the material capture): the color the GI bounces")
         , xproperty::settings::enum_item("COVERAGE", gi_view::COVERAGE, "Which GI read lights each pixel: green its own surfels (per pixel), blue the vertices' (per pixel unsupported there), magenta none (no GI there)")
         };
