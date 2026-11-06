@@ -408,6 +408,7 @@ void ConvertToCompilerMesh(void)
             }
             std::size_t IndexCount = S.m_Indices.size();
             float       Error      = 0;
+            S.m_LODs.reserve(S.m_LODs.size() + std::size(LODs));    // (Source below references the last LOD: emplace_back reallocating under it read freed memory - LOD 2 on never built)
             for (const auto& L : LODs)
             {
                 const std::size_t target_index_count = std::size_t(IndexCount * L.m_LODReduction + 0.005f) / 3 * 3;
