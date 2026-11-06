@@ -78,7 +78,7 @@ namespace xgeom_static_editor
         float               m_BloomThreshold       = 0.99f;      // the exposed light where the bloom starts (1: white)
         float               m_BloomSpread          = 0.7f;      // 0 tight around the light .. 1 wide
         bool                m_bAutoExposure        = true;      // the frame's exposure follows what it sees
-        float               m_ReflectionRoughness  = 0.0f;      // the traced reflections: receivers up to this roughness (0: the probes alone)
+        float               m_ReflectionRoughness  = 0.3f;      // (2026-11-06: on by default - D2, everything on as a shipped game)      // the traced reflections: receivers up to this roughness (0: the probes alone)
         bool                m_bReflectionScreen    = false;     // the screen's reflections first: rays only where it has no certain answer
         bool                m_bReflectionFixedRays = false;     // the rays along the mirror direction, not over the rough lobe
         bool                m_bTAA                 = true;      // temporal antialiasing
