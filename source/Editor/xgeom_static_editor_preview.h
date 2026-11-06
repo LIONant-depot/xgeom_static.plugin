@@ -7,6 +7,7 @@
 // HDR variants, tone mapped by the renderer) into this runtime's render_view; the editor's overlays (grid, wire frame, lines) are
 // drawn over the tone-mapped image with the scene's depth. Render opens its own render passes on the window, so it runs before
 // the frame's UI is rendered; the panel then shows the view's output texture.
+#include "dependencies/xLIONRender/src/xlionrender_env.h"      // (the environment switches: one answer to MSVC's C4996, header only)
 #include "source/Tools/xgpu_imgui_breach.h"
 #include "dependencies/xLIONRender/src/xlionrender.h"
 #include "source/Tools/xgpu_xcore_bitmap_helpers.h"
@@ -351,7 +352,7 @@ namespace xgeom_static_editor::preview
         {
             if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f || !m_Mesh.isValid()) return;
             // Measurement only (XLION_FRAME_TIMES, as the host's FRAMETIMES): the preview's parts, the mean of 120 frames
-            static const bool s_bTimes = std::getenv("XLION_FRAME_TIMES") != nullptr;
+            static const bool s_bTimes = xlionrender::Env("XLION_FRAME_TIMES") != nullptr;
             using clk = std::chrono::steady_clock;
             const auto TP0 = clk::now();
             const auto PMs = [](clk::time_point a, clk::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
@@ -411,7 +412,7 @@ namespace xgeom_static_editor::preview
                     const auto TG0 = clk::now();      // (measurement: the load's steps, on this thread)
                     xlionrender::gi::surfel_mesh Surfels;
                     xlionrender::gi::FromXGeomStatic(Surfels, Geom);
-                    if (const char* pSdf = std::getenv("XLION_SDF"); pSdf && std::atoi(pSdf) >= 11)      // (the gate, before the compiler keeps it: reflections_sdf_plan)
+                    if (const char* pSdf = xlionrender::Env("XLION_SDF"); pSdf && std::atoi(pSdf) >= 11)      // (the gate, before the compiler keeps it: reflections_sdf_plan)
                     {
                         namespace sb = xlionrender::gi::sdf_bake;
                         std::vector<sb::v3f> P; P.reserve(Surfels.m_Pos.size());
@@ -457,7 +458,7 @@ namespace xgeom_static_editor::preview
             Scene.m_ReflectionMaxRoughness = S.m_ReflectionRoughness;
             Scene.m_bReflectionScreen = S.m_bReflectionScreen;
             Scene.m_bReflectionFixedRays = S.m_bReflectionFixedRays;
-            if (const char* p = std::getenv("XLION_REFL")) { int Sc = 0; (void)std::sscanf(p, "%f %d", &Scene.m_ReflectionMaxRoughness, &Sc); Scene.m_bReflectionScreen = Sc != 0; }      // (measurement)
+            if (const char* p = xlionrender::Env("XLION_REFL")) { int Sc = 0; (void)xlionrender::Scan(p, "%f %d", &Scene.m_ReflectionMaxRoughness, &Sc); Scene.m_bReflectionScreen = Sc != 0; }      // (measurement)
             if (Scene.m_bDebugReflectionMirror && Scene.m_ReflectionMaxRoughness <= 0) Scene.m_ReflectionMaxRoughness = 1;      // (the mirror view traces: what each surface really has to reflect)
             Scene.m_GI.m_bPathTraced = S.m_GIView == render_settings::gi_view::PATH_TRACED || S.m_GIView == render_settings::gi_view::PATH_TRACED_LIGHT;
             Scene.m_GI.m_bShowBlend = true;                 // (the shown GI moves toward the new light: never a jump)
@@ -477,10 +478,10 @@ namespace xgeom_static_editor::preview
                 Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
             // (measurement, XLION_PROBE_GRID=<spacing>, 0: one probe over the whole geometry: grading rendered probes without a level. A preview has none otherwise; the nearest 32 are resident)
-            if (static const char* s_pGrid = std::getenv("XLION_PROBE_GRID"); s_pGrid)
+            if (static const char* s_pGrid = xlionrender::Env("XLION_PROBE_GRID"); s_pGrid)
             {
                 const float         Sp = float(std::atof(s_pGrid));
-                static const float  s_ProbeY = [] { const char* p = std::getenv("XLION_PROBE_Y"); return p ? float(std::atof(p)) : 1.6f; }();      // (standing height in the level's units: the bounds' floor can be far under the street, Bistro's is 4.7 under it; the box's floor 1.7 below)
+                static const float  s_ProbeY = [] { const char* p = xlionrender::Env("XLION_PROBE_Y"); return p ? float(std::atof(p)) : 1.6f; }();      // (standing height in the level's units: the bounds' floor can be far under the street, Bistro's is 4.7 under it; the box's floor 1.7 below)
                 const xmath::fvec3  Lo = Geom.m_BBox.m_Min, Hi = Geom.m_BBox.m_Max;
                 if (Sp <= 0.0f) Scene.m_Probes.push_back({ .m_Position = (Lo + Hi) * 0.5f, .m_BoxMin = Lo, .m_BoxMax = Hi, .m_Blend = 0.0f });
                 else for (float x = Lo.m_X + Sp * 0.5f; x < Hi.m_X; x += Sp) for (float z = Lo.m_Z + Sp * 0.5f; z < Hi.m_Z; z += Sp)
@@ -488,11 +489,11 @@ namespace xgeom_static_editor::preview
             }
 
             // (measurement, XLION_TEST_SPOT="x y z dx dy dz radius intensity": a strong orange spot outside the GI, the worst case for a store filled by GI rays; XLION_TEST_SPOT_GI: in the GI, for the reference)
-            if (static const char* s_pSpot = std::getenv("XLION_TEST_SPOT"); s_pSpot)
+            if (static const char* s_pSpot = xlionrender::Env("XLION_TEST_SPOT"); s_pSpot)
             {
                 float V[8] = {};
-                if (std::sscanf(s_pSpot, "%f %f %f %f %f %f %f %f", &V[0], &V[1], &V[2], &V[3], &V[4], &V[5], &V[6], &V[7]) == 8)
-                    Scene.m_LocalLights.push_back({ .m_Type = xlionrender::local_light::type::SPOT, .m_Position = { V[0], V[1], V[2] }, .m_Direction = xmath::fvec3{ V[3], V[4], V[5] }.NormalizeCopy(), .m_Radius = V[6], .m_InnerAngle = 0.5f, .m_OuterAngle = 0.7f, .m_Color = { 1.0f, 0.45f, 0.1f }, .m_Intensity = V[7], .m_bCastShadows = true, .m_bGI = std::getenv("XLION_TEST_SPOT_GI") != nullptr, .m_Handle = 0x5907 });
+                if (xlionrender::Scan(s_pSpot, "%f %f %f %f %f %f %f %f", &V[0], &V[1], &V[2], &V[3], &V[4], &V[5], &V[6], &V[7]) == 8)
+                    Scene.m_LocalLights.push_back({ .m_Type = xlionrender::local_light::type::SPOT, .m_Position = { V[0], V[1], V[2] }, .m_Direction = xmath::fvec3{ V[3], V[4], V[5] }.NormalizeCopy(), .m_Radius = V[6], .m_InnerAngle = 0.5f, .m_OuterAngle = 0.7f, .m_Color = { 1.0f, 0.45f, 0.1f }, .m_Intensity = V[7], .m_bCastShadows = true, .m_bGI = xlionrender::Env("XLION_TEST_SPOT_GI") != nullptr, .m_Handle = 0x5907 });
             }
 
             const auto TP1 = clk::now();

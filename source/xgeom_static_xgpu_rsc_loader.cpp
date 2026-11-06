@@ -1,3 +1,4 @@
+#include "dependencies/xLIONRender/src/xlionrender_env.h"      // (the environment switches: one answer to MSVC's C4996, header only)
 #include "xgeom_static_xgpu_runtime.h"
 #include "xgeom_static_xgpu_rsc_loader.h"
 
@@ -181,7 +182,7 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
 
     // Its residency (the GPU's prefix: XGEOM_STATIC_FINEST_LOD - a test's or a low-memory run's - else all of it)
     {
-        static const int s_Finest = [] { const char* p = std::getenv("XGEOM_STATIC_FINEST_LOD"); return p ? std::max(0, std::atoi(p)) : 0; }();
+        static const int s_Finest = [] { const char* p = xlionrender::Env("XGEOM_STATIC_FINEST_LOD"); return p ? std::max(0, std::atoi(p)) : 0; }();
         std::lock_guard Lk(s_GeomResidency.m_Lock);
         auto& R = s_GeomResidency.m_Geoms.emplace_back(geom_residency{ pXGPUGeom, GUID, 0 });
         if (s_Finest > 0) ApplyGeomResidency(UserData.m_Device, R, s_Finest);
@@ -207,7 +208,7 @@ xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader
     // Measurement (XLION_GEOM_SIZES): what the geometry's parts weigh, the GI's derived block by its parts (its sections' blocks one after
     // the other: xlionrender gi::surfel_mesh::UnpackDerived's layout - a header, the read grid's table and lists, two levels of neighbors,
     // the rays' origins)
-    if (std::getenv("XLION_GEOM_SIZES"))
+    if (xlionrender::Env("XLION_GEOM_SIZES"))
     {
         const auto MB = [](std::size_t b) { return double(b) / (1024.0 * 1024.0); };
         const auto& G = *pXGPUGeom;
