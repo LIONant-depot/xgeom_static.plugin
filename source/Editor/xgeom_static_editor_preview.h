@@ -398,6 +398,7 @@ namespace xgeom_static_editor::preview
                 xeditor::scale_reference::TransformBox(m_PendingL2W, BoxMin, BoxMax);
                 const float Y    = S.m_bGridToYMin ? BoxMin.m_Y : 0;
                 const float Size = std::max(200.0f, 10.0f * (BoxMax - BoxMin).Length());
+                if (S.m_View.getPosition().m_Y >= Y)    // front face only: from below the ground there is no grid (as xeditor_tools' grid)
                 Scene.m_Draws.push_back({ .m_Mesh = m_GroundMesh, .m_L2W = xmath::fmat4::fromTranslation({ 0, Y, 0 }) * xmath::fmat4::fromScale({ Size, 1, Size })
                                         , .m_Material = { .m_Roughness = 1.0f, .m_bCastShadows = false, .m_bEditorGrid = true } });
                 S.m_GridYMin = Geom.m_BBox.m_Min.m_Y;       // the property shows where the geometry ends, whatever the grid does
