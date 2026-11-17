@@ -4,7 +4,10 @@
 
 #include "dependencies/xmath/source/xmath_fshapes.h"
 #include "dependencies/xserializer/source/xserializer.h"
+#include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"     // (xrsc::material_instance_ref: the header stands on its own)
 #include <span>  // Add for std::span
+#include <array>
+#include <vector>
 
 namespace xgeom_static
 {
@@ -237,6 +240,36 @@ namespace xgeom_static
             }
         }
         return -1;
+    }
+
+    //-------------------------------------------------------------------------
+    // The LOD 0 triangles of a geometry in object space, decoded from its compressed clusters (a collision mesh, a CPU query): the positions of
+    // every vertex (a coarser LOD's too: the buffer's order) and three indices per LOD 0 triangle. Clusters a LOD table names past LOD 0 are left out.
+    inline void LOD0Triangles(const geom& Geom, std::vector<std::array<float, 3>>& Pos, std::vector<std::uint32_t>& Tri) noexcept
+    {
+        const auto Verts = Geom.getVertices(); const auto Index = Geom.getIndices(); const auto Data = Geom.getClusterData();
+        const auto Clusters = Geom.getClusters(); const auto LODs = Geom.getLODs(); const auto Subs = Geom.getSubmeshes();
+        std::vector<bool> LOD0(Clusters.size(), LODs.empty());
+        for (const auto& M : Geom.getMeshes())
+        {
+            if (std::size_t(M.m_iLOD) >= LODs.size()) continue;
+            const auto& L = LODs[M.m_iLOD];
+            for (std::size_t s = L.m_iSubmesh; s < std::size_t(L.m_iSubmesh) + L.m_nSubmesh && s < Subs.size(); ++s)
+                for (std::size_t c = Subs[s].m_iCluster; c < std::size_t(Subs[s].m_iCluster) + Subs[s].m_nCluster && c < LOD0.size(); ++c) LOD0[c] = true;
+        }
+        Pos.assign(Verts.size(), { 0, 0, 0 }); Tri.clear();
+        const auto Q = [](std::int16_t q) noexcept { return (float(q) + 32768.0f) / 32767.5f - 1.0f; };
+        for (std::size_t c = 0; c < Clusters.size() && c < Data.size(); ++c)
+        {
+            const auto& C = Clusters[c]; const auto& D = Data[c];
+            for (std::uint32_t v = C.m_iVertex; v < C.m_iVertex + C.m_nVertices && v < Verts.size(); ++v)
+                Pos[v] = { Q(Verts[v].m_XPos) * D.m_PosScaleAndWPADDING.m_X + D.m_PosTrasnlationAndWPADDING.m_X
+                         , Q(Verts[v].m_YPos) * D.m_PosScaleAndWPADDING.m_Y + D.m_PosTrasnlationAndWPADDING.m_Y
+                         , Q(Verts[v].m_ZPos) * D.m_PosScaleAndWPADDING.m_Z + D.m_PosTrasnlationAndWPADDING.m_Z };
+            if (!LOD0[c]) continue;
+            for (std::uint32_t i = C.m_iIndex; i + 2 < C.m_iIndex + C.m_nIndices && i + 2 < Index.size(); i += 3)
+                for (int k = 0; k < 3; ++k) Tri.push_back(C.m_iVertex + Index[i + k]);
+        }
     }
 }
 
