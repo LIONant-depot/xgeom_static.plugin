@@ -37,6 +37,27 @@
 #include <optional>
 #include <iostream>
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+// std::getenv / std::fopen / std::sscanf are the standard's and safe as used here (switches read once; numbers only); MSVC deprecates them
+// (C4996, its own _s forms), so the warning is answered once, here (the same answer as xlionrender_env.h; Q1: zero warnings in our code)
+namespace xgeom_static_env
+{
+#if defined(_MSC_VER)
+    #define xgeom_static_env_ENV_PUSH __pragma(warning(push)) __pragma(warning(disable: 4996))
+    #define xgeom_static_env_ENV_POP  __pragma(warning(pop))
+#else
+    #define xgeom_static_env_ENV_PUSH
+    #define xgeom_static_env_ENV_POP
+#endif
+    inline const char* Env(const char* pName) noexcept { xgeom_static_env_ENV_PUSH return std::getenv(pName); xgeom_static_env_ENV_POP }
+    inline std::FILE* Open(const char* pPath, const char* pMode) noexcept { xgeom_static_env_ENV_PUSH return std::fopen(pPath, pMode); xgeom_static_env_ENV_POP }
+    template<typename... T> int Scan(const char* pText, const char* pFormat, T... A) noexcept { xgeom_static_env_ENV_PUSH return std::sscanf(pText, pFormat, A...); xgeom_static_env_ENV_POP }
+}
+
+
 namespace xgeom_static_compiler
 {
     struct implementation : xgeom_static_compiler::instance
@@ -442,7 +463,7 @@ void ConvertToCompilerMesh(void)
                 // XGEOM_STATIC_LODS=0.5,0.25,...: those LODs (each a fraction of the previous one's indices) for a mesh whose descriptor has
                 // none - an experiment's switch (the shadow pages' LODs, shadows_gpu_plan.md v3) without editing the descriptors
                 if (details->m_LODs.empty())
-                    if (const char* pEnv = std::getenv("XGEOM_STATIC_LODS"); pEnv && *pEnv)
+                    if (const char* pEnv = xgeom_static_env::Env("XGEOM_STATIC_LODS"); pEnv && *pEnv)
                         for (const char* q = pEnv; *q; )
                         {
                             char* pEnd = nullptr;
@@ -1359,14 +1380,14 @@ void ConvertToCompilerMesh(void)
         void PrecheckGI()
         {
             if (m_Descriptor.m_GI.m_Mode == xgeom_static::gi_mode::OFF) return;
-            if (const char* pU = std::getenv("XLION_GI_UNCAPPED"))     // measurement (GI chunks plan): the uncapped bake's memory, stage by stage
+            if (const char* pU = xgeom_static_env::Env("XLION_GI_UNCAPPED"))     // measurement (GI chunks plan): the uncapped bake's memory, stage by stage
             {
                 float R = 1; int Stop = 99;
                 int Target = 48000;
-                (void)std::sscanf(pU, "%f,%d,%d", &R, &Stop, &Target);
+                (void)xgeom_static_env::Scan(pU, "%f,%d,%d", &R, &Stop, &Target);
                 using clock = std::chrono::steady_clock;
                 const auto T0 = clock::now();
-                FILE* pF = std::fopen("gi_autopsy.txt", "a");
+                FILE* pF = xgeom_static_env::Open("gi_autopsy.txt", "a");
                 const auto Stage = [&](const char* pName, std::size_t Count)
                 {
                     // the process memory: working set, its peak, committed (Linux: /proc/self/status VmRSS, VmHWM, VmData)
@@ -1711,7 +1732,7 @@ void ConvertToCompilerMesh(void)
             if (n <= max_gi_surfels_v * 9 / 10)
             {
                 LogMessage(xresource_pipeline::msg_type::INFO, std::format("GI: {} surfels at SurfelSize {} (a mesh can have {})", n, R, max_gi_surfels_v));
-                if (const char* pF = std::getenv("XLION_GI_FORCE_SECTIONS"))      // (tests, measurements: sections of about that many owned surfels)
+                if (const char* pF = xgeom_static_env::Env("XLION_GI_FORCE_SECTIONS"))      // (tests, measurements: sections of about that many owned surfels)
                 {
                     m_bGISections = true;
                     BuildGIRegions(M, R, std::size_t(std::max(1, std::atoi(pF))));
@@ -1922,7 +1943,7 @@ void ConvertToCompilerMesh(void)
             };
 
             M.m_bLeakProtection = m_Descriptor.m_GI.m_bLeakProtection;
-            if (m_bGISections || std::getenv("XLION_GI_FORCE_SECTIONS")) { BakeGISections(M, R); return; }      // (the env: tests and measurements on small meshes)
+            if (m_bGISections || xgeom_static_env::Env("XLION_GI_FORCE_SECTIONS")) { BakeGISections(M, R); return; }      // (the env: tests and measurements on small meshes)
             M.m_OnBakeProgress = [this](float f) { displayProgressBar("Baking the GI surfels", 0.9f * f); };       // (then the read grid and coverage)
             M.Bake(R, 3 * R, {}, max_gi_surfels_v);
             M.m_OnBakeProgress = nullptr;
