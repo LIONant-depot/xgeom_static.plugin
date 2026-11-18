@@ -143,6 +143,8 @@ namespace xgeom_static_residency
 
 xresource::loader< xrsc::geom_static_type_guid_v >::data_type* xresource::loader< xrsc::geom_static_type_guid_v >::Load(xresource::mgr& Mgr, const full_guid& GUID)
 {
+    // E61: no device (the windowless editor, a server): a resource that only draws is not loaded - every caller handles null
+    if (!Mgr.getUserData<resource_mgr_user_data>().m_Device.m_Private) return nullptr;
     auto&                   UserData    = Mgr.getUserData<resource_mgr_user_data>();
     std::wstring            Path        = Mgr.getResourcePath(GUID, type_name_v);
     xgeom_static::geom*     pGeom       = nullptr;
