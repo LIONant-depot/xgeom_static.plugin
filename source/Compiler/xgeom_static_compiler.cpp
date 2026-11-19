@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <optional>
+#include <fstream>
 #include <iostream>
 
 #include <algorithm>
@@ -2239,6 +2240,217 @@ void ConvertToCompilerMesh(void)
                 , G.m_Vertex.size(), AOR, CavR, SumAO / std::max<std::size_t>(G.m_Vertex.size(), 1), SumCav / std::max<std::size_t>(G.m_Vertex.size(), 1)));
         }
 
+        //--------------------------------------------------------------------------------------
+        // An uncompressed scanline OpenEXR file, float RGBA (the channels stored A, B, G, R: the format's alphabetical order). The
+        // texture compile reads it (xbmp_tools' tinyexr loader) and does the compression, mips and sizes
+        static bool WriteEXR(const std::wstring& Path, int W, int H, const std::vector<float>& RGBA) noexcept
+        {
+            std::vector<std::uint8_t> B;
+            const auto Put  = [&](const void* p, std::size_t n) { B.insert(B.end(), (const std::uint8_t*)p, (const std::uint8_t*)p + n); };
+            const auto I32  = [&](std::int32_t v) { Put(&v, 4); };
+            const auto F32  = [&](float v) { Put(&v, 4); };
+            const auto Str  = [&](const char* s) { Put(s, std::strlen(s) + 1); };
+            const auto Attr = [&](const char* Name, const char* Type, std::int32_t Size) { Str(Name); Str(Type); I32(Size); };
+            const std::uint8_t Magic[] = { 0x76, 0x2f, 0x31, 0x01, 2, 0, 0, 0 };
+            Put(Magic, sizeof(Magic));
+            Attr("channels", "chlist", 4 * (2 + 16) + 1);
+            for (const char* C : { "A", "B", "G", "R" }) { Str(C); I32(2 /*FLOAT*/); const std::uint8_t z[4] = {}; Put(z, 4); I32(1); I32(1); }
+            B.push_back(0);
+            Attr("compression", "compression", 1);           B.push_back(0);                 // NONE
+            Attr("dataWindow", "box2i", 16);                 I32(0); I32(0); I32(W - 1); I32(H - 1);
+            Attr("displayWindow", "box2i", 16);              I32(0); I32(0); I32(W - 1); I32(H - 1);
+            Attr("lineOrder", "lineOrder", 1);               B.push_back(0);                 // INCREASING_Y
+            Attr("pixelAspectRatio", "float", 4);            F32(1.0f);
+            Attr("screenWindowCenter", "v2f", 8);            F32(0.0f); F32(0.0f);
+            Attr("screenWindowWidth", "float", 4);           F32(1.0f);
+            B.push_back(0);                                                                   // the header's end
+            const std::uint64_t LineBytes = std::uint64_t(W) * 4 * 4, TableAt = B.size(), First = TableAt + std::uint64_t(H) * 8;
+            for (int y = 0; y < H; ++y) { const std::uint64_t Off = First + std::uint64_t(y) * (8 + LineBytes); Put(&Off, 8); }
+            for (int y = 0; y < H; ++y)
+            {
+                I32(y); I32(std::int32_t(LineBytes));
+                for (int c : { 3, 2, 1, 0 }) for (int x = 0; x < W; ++x) F32(RGBA[(std::size_t(y) * W + x) * 4 + c]);
+            }
+            std::error_code Ec; std::filesystem::create_directories(std::filesystem::path(Path).parent_path(), Ec);
+            std::ofstream F{ std::filesystem::path(Path), std::ios::binary };
+            F.write((const char*)B.data(), std::streamsize(B.size()));
+            return bool(F);
+        }
+
+        //--------------------------------------------------------------------------------------
+        // The wear masks into a texture (HardSurface/BakeMasks + MaskTexture): the triangles
+        // rasterized in UV0, per texel the 32 rays of BakeMasks (xlionrender::gi::ParallelFor over rows), R AO, G cavity, B height, A 1
+        // (reserved: grime runs). Overlapping UV0 is refused (the per-vertex bake instead, with a warning). Cached: the content hash of the
+        // geometry + the settings in a .key beside the .exr; a match skips the bake. The texture itself is emitted after Compile
+        // (EmitMaskTexture). -> false: refused (the caller bakes per vertex)
+        bool BakeMaskTexture()
+        {
+            using v3 = xlionrender::gi::v3;
+            auto& G = m_RawGeom;
+            const auto& HS = m_Descriptor.m_HardSurface;
+            std::vector<std::array<int, 3>> Tris;
+            for (const auto& F : G.m_Facet) for (int i = 1; i + 1 < F.m_nVertices; ++i) Tris.push_back({ F.m_iVertex[0], F.m_iVertex[i], F.m_iVertex[i + 1] });
+            if (Tris.empty()) return false;
+
+            float Lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, Hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+            for (const auto& T : Tris) for (int k : T) { const auto& P = G.m_Vertex[k].m_Position; const float p[3] = { P.m_X, P.m_Y, P.m_Z }; for (int a = 0; a < 3; ++a) { Lo[a] = std::min(Lo[a], p[a]); Hi[a] = std::max(Hi[a], p[a]); } }
+            const float Diag = std::sqrt((Hi[0] - Lo[0]) * (Hi[0] - Lo[0]) + (Hi[1] - Lo[1]) * (Hi[1] - Lo[1]) + (Hi[2] - Lo[2]) * (Hi[2] - Lo[2]));
+            const int N = HS.m_MaskTextureSize > 0 ? std::clamp(HS.m_MaskTextureSize, 16, 4096) : (Diag < 1.0f ? 512 : Diag < 4.0f ? 1024 : 2048);
+            const float AOR = std::max(HS.m_MaskAORadius, 1e-4f), CavR = std::clamp(HS.m_MaskCavityRadius, 1e-4f, AOR);
+
+            // the cache key: what the bake reads (positions, normals, UV0, triangles) and its settings
+            std::uint64_t Key = 1469598103934665603ull;
+            const auto Hash = [&](const void* p, std::size_t n) { for (std::size_t i = 0; i < n; ++i) { Key ^= ((const std::uint8_t*)p)[i]; Key *= 1099511628211ull; } };
+            for (const auto& T : Tris) for (int k : T) { const auto& V = G.m_Vertex[k]; Hash(&V.m_Position, sizeof(V.m_Position)); Hash(&V.m_BTN[0].m_Normal, sizeof(V.m_BTN[0].m_Normal)); Hash(&V.m_UV[0], sizeof(V.m_UV[0])); }
+            const float Settings[] = { float(N), AOR, CavR, 1.0f /*bake version*/ };
+            Hash(Settings, sizeof(Settings));
+            const std::wstring Rel = std::format(L"Cache\\Resources\\Baked\\WearMasks\\{:016X}.exr", m_ResourceGuid.m_Value);
+            const std::wstring Exr = std::format(L"{}\\{}", m_ProjectPaths.m_Project, Rel), KeyFile = Exr + L".key";
+            const std::string KeyText = std::format("{:016X}", Key);
+            {
+                std::ifstream K{ std::filesystem::path(KeyFile) }; std::string Old; std::getline(K, Old);
+                std::error_code Ec;
+                if (Old == KeyText && std::filesystem::exists(Exr, Ec))
+                {
+                    LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: wear mask texture {}x{} up to date (cache key {}): not baked again", N, N, KeyText));
+                    m_MaskTexturePath = Rel; return true;
+                }
+            }
+            const auto T0 = std::chrono::steady_clock::now();
+
+            // the rays' mesh (as BakeMasks)
+            xlionrender::gi::surfel_mesh M;
+            for (const auto& V : G.m_Vertex) { M.m_Pos.push_back(v3{ V.m_Position.m_X, V.m_Position.m_Y, V.m_Position.m_Z }); M.m_Nrm.push_back(v3{ V.m_BTN[0].m_Normal.m_X, V.m_BTN[0].m_Normal.m_Y, V.m_BTN[0].m_Normal.m_Z }); }
+            M.m_Tris = Tris;
+            M.BuildRays();
+
+            // UV0 raster: per texel its triangle and barycentrics; a texel two triangles claim is an overlap
+            std::vector<std::int32_t> Owner(std::size_t(N) * N, -1);
+            std::vector<std::array<float, 3>> Bary(std::size_t(N) * N);
+            std::size_t nCovered = 0, nOverlap = 0;
+            for (std::size_t t = 0; t < Tris.size(); ++t)
+            {
+                const auto& A = G.m_Vertex[Tris[t][0]].m_UV[0]; const auto& B2 = G.m_Vertex[Tris[t][1]].m_UV[0]; const auto& C = G.m_Vertex[Tris[t][2]].m_UV[0];
+                const float ax = A.m_X * N, ay = A.m_Y * N, bx = B2.m_X * N, by = B2.m_Y * N, cx = C.m_X * N, cy = C.m_Y * N;
+                const float Den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+                if (std::abs(Den) < 1e-12f) continue;
+                const int x0 = std::max(0, int(std::floor(std::min({ ax, bx, cx })))), x1 = std::min(N - 1, int(std::ceil(std::max({ ax, bx, cx }))));
+                const int y0 = std::max(0, int(std::floor(std::min({ ay, by, cy })))), y1 = std::min(N - 1, int(std::ceil(std::max({ ay, by, cy }))));
+                for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x)
+                {
+                    const float px = x + 0.5f, py = y + 0.5f;
+                    const float w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / Den, w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / Den, w2 = 1.0f - w0 - w1;
+                    if (w0 < -1e-4f || w1 < -1e-4f || w2 < -1e-4f) continue;
+                    auto& O = Owner[std::size_t(y) * N + x];
+                    if (O >= 0) { ++nOverlap; continue; }
+                    O = std::int32_t(t); Bary[std::size_t(y) * N + x] = { w0, w1, w2 }; ++nCovered;
+                }
+            }
+            if (nCovered == 0 || nOverlap > nCovered / 200)
+            {
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("HardSurface: MaskTexture refused - UV0 overlaps ({} of {} texels claimed twice at {}x{}): the masks are baked per vertex instead. Give the model non-overlapping UVs to bake a texture", nOverlap, nCovered, N, N));
+                return false;
+            }
+
+            // the rays, a row a job
+            const float HInv = Hi[1] > Lo[1] ? 1.0f / (Hi[1] - Lo[1]) : 0.0f;
+            std::vector<float> RGBA(std::size_t(N) * N * 4, 0.0f);
+            std::vector<std::uint8_t> Done(std::size_t(N) * N, 0);
+            constexpr int rays_v = 32;
+            xlionrender::gi::ParallelFor(N, [&](int y)
+            {
+                for (int x = 0; x < N; ++x)
+                {
+                    const std::size_t i = std::size_t(y) * N + x;
+                    if (Owner[i] < 0) continue;
+                    const auto& T = Tris[Owner[i]]; const auto& W = Bary[i];
+                    const v3 P = M.m_Pos[T[0]] * W[0] + M.m_Pos[T[1]] * W[1] + M.m_Pos[T[2]] * W[2];
+                    v3 Nn = M.m_Nrm[T[0]] * W[0] + M.m_Nrm[T[1]] * W[1] + M.m_Nrm[T[2]] * W[2];
+                    const float L = Nn.Length(); Nn = L > 1e-6f ? Nn * (1.0f / L) : v3{ 0, 1, 0 };
+                    const v3 Ax = std::abs(Nn.m_Y) < 0.9f ? v3{ 0, 1, 0 } : v3{ 1, 0, 0 };
+                    const v3 Tg = v3::Cross(Ax, Nn).NormalizeCopy(), Bt = v3::Cross(Nn, Tg);
+                    const v3 O = P + Nn * 1e-3f;
+                    const float Rot = float((i * 2654435761u) & 0xFFFFu) / 65536.0f;
+                    int OpenAO = 0, OpenCav = 0;
+                    for (int k = 0; k < rays_v; ++k)
+                    {
+                        std::uint32_t b = std::uint32_t(k); b = (b << 16) | (b >> 16); b = ((b & 0x55555555u) << 1) | ((b & 0xAAAAAAAAu) >> 1); b = ((b & 0x33333333u) << 2) | ((b & 0xCCCCCCCCu) >> 2);
+                        b = ((b & 0x0F0F0F0Fu) << 4) | ((b & 0xF0F0F0F0u) >> 4); b = ((b & 0x00FF00FFu) << 8) | ((b & 0xFF00FF00u) >> 8);
+                        const float u1 = (k + 0.5f) / rays_v, u2 = float(b) * 2.3283064e-10f + Rot, r = std::sqrt(u1), phi = 6.2831853f * u2;
+                        const v3 D = (Tg * (r * std::cos(phi)) + Bt * (r * std::sin(phi)) + Nn * std::sqrt(std::max(0.0f, 1.0f - u1))).NormalizeCopy();
+                        if (!M.Occluded(O, D, AOR)) { ++OpenAO; ++OpenCav; }
+                        else if (!M.Occluded(O, D, CavR)) ++OpenCav;
+                    }
+                    RGBA[i * 4 + 0] = float(OpenAO) / rays_v; RGBA[i * 4 + 1] = float(OpenCav) / rays_v; RGBA[i * 4 + 2] = (P.m_Y - Lo[1]) * HInv; RGBA[i * 4 + 3] = 1.0f;
+                    Done[i] = 1;
+                }
+            });
+            // a few texels of padding around every island (the mips and bilinear taps read past the edges)
+            for (int Pass = 0; Pass < 4; ++Pass)
+            {
+                auto Next = Done;
+                for (int y = 0; y < N; ++y) for (int x = 0; x < N; ++x)
+                {
+                    const std::size_t i = std::size_t(y) * N + x;
+                    if (Done[i]) continue;
+                    float S[4] = {}; int n = 0;
+                    for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        const int xx = x + dx, yy = y + dy;
+                        if (xx < 0 || yy < 0 || xx >= N || yy >= N || !Done[std::size_t(yy) * N + xx]) continue;
+                        for (int c = 0; c < 4; ++c) S[c] += RGBA[(std::size_t(yy) * N + xx) * 4 + c];
+                        ++n;
+                    }
+                    if (n) { for (int c = 0; c < 4; ++c) RGBA[i * 4 + c] = S[c] / n; Next[i] = 1; }
+                }
+                Done = std::move(Next);
+            }
+            if (!WriteEXR(Exr, N, N, RGBA)) { LogMessage(xresource_pipeline::msg_type::ERROR, std::format("HardSurface: could not write {}", xstrtool::To(Exr))); return false; }
+            { std::ofstream K{ std::filesystem::path(KeyFile) }; K << KeyText << "\n"; }
+            double SumAO = 0; for (std::size_t i = 0; i < Owner.size(); ++i) if (Owner[i] >= 0) SumAO += RGBA[i * 4];
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: wear mask texture {}x{} baked ({} texels covered, {:.0f}% of the square; mean AO {:.3f}) in {:.1f} s -> {}"
+                , N, N, nCovered, 100.0 * nCovered / (double(N) * N), SumAO / std::max<std::size_t>(nCovered, 1), std::chrono::duration<double>(std::chrono::steady_clock::now() - T0).count(), xstrtool::To(Rel)));
+            m_MaskTexturePath = Rel;
+            return true;
+        }
+
+        // The baked mask texture as a virtual Texture owned by the geometry: its guid from the geometry's and the tag "WearMasks" (stable),
+        // linear RGBA (R AO, G cavity, B height, A runs), compressed by the texture compile (BC7, mips). Added to the geometry's made-list
+        void EmitMaskTexture()
+        {
+            if (m_MaskTexturePath.empty()) return;
+            const xresource::full_guid Owner{ m_ResourceGuid, xgeom_static::resource_type_guid_v };
+            const std::wstring OwnerFolder = std::format(L"{}/{}.desc", m_ProjectPaths.m_Descriptors, m_ResourcePartialPath);
+            xmaterial_instance::import::emitter E
+            { .m_ProjectPath  = m_ProjectPaths.m_Project
+            , .m_Descriptors  = m_ProjectPaths.m_Descriptors
+            , .m_OwnerFolder  = OwnerFolder
+            , .m_Owner        = Owner
+            , .m_ModelPath    = m_Descriptor.m_ImportAsset
+            , .m_Settings     = m_Descriptor.m_ImportMaterials
+            , .m_Dependencies = m_Dependencies
+            , .m_Warning      = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
+            , .m_Info         = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::INFO, std::move(Text)); }
+            };
+            const std::wstring File = m_MaskTexturePath;
+            const auto Ref = E.Texture("WearMasks", std::format("{} (Wear Masks)", !m_Descriptor.m_AllMeshesDetails.m_Name.empty() ? m_Descriptor.m_AllMeshesDetails.m_Name : m_Details.m_MeshList.empty() ? std::string("geometry") : m_Details.m_MeshList[0].m_Name), Owner, [&](xtexture_rsc::descriptor& D)
+            {
+                D.m_UsageType     = xtexture_rsc::usage_type::COLOR_AND_ALPHA;  // four linear data channels as they are (no cutout coverage, no colour fill)
+                D.m_Compression   = xtexture_rsc::compression_format::RGBA_BC7;
+                D.m_bSRGB         = false;
+                D.m_bGenerateMips = true;
+                xtexture_rsc::single_input In; In.m_FileName = File;
+                D.m_InputVariant  = std::move(In);
+            });
+            xresource_pipeline::virtual_rsc::owned_list Made;
+            Made.Load(OwnerFolder);
+            if (!Made.Contains(Ref)) Made.m_Resources.push_back(Ref);
+            Made.Save(OwnerFolder);
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: wear mask texture {:016X} (virtual, owned by this geometry)", Ref.m_Instance.m_Value));
+        }
+
+        std::wstring m_MaskTexturePath;                         // BakeMaskTexture's file (project relative); empty: none
+
         xerr Compile()
         {
             try
@@ -2338,7 +2550,7 @@ void ConvertToCompilerMesh(void)
                 //
                 // The wear masks into the vertex colour: after the GI split (its new vertices get masks too)
                 //
-                if (m_Descriptor.m_HardSurface.m_bBakeMasks) BakeMasks();
+                if (m_Descriptor.m_HardSurface.m_bBakeMasks && !(m_Descriptor.m_HardSurface.m_bMaskTexture && BakeMaskTexture())) BakeMasks();
 
                 //
                 // Clean the mesh
@@ -2566,6 +2778,7 @@ void ConvertToCompilerMesh(void)
             // OK Time to compile
             //
             Compile();
+            EmitMaskTexture();                                      // (after the bake: the virtual texture of the wear masks, when one was baked)
 
             //
             // Serialize the details structure

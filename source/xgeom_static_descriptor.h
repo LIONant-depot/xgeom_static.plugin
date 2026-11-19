@@ -55,6 +55,8 @@ namespace xgeom_static
         bool                m_bBakeMasks       = false;     // the wear masks into the vertex colour (R AO, G cavity, B height; A 1)
         float               m_MaskAORadius     = 0.3f;      // meters (after the PreTranslation)
         float               m_MaskCavityRadius = 0.04f;     // meters
+        bool                m_bMaskTexture     = false;     // BakeMasks into a texture (UV0) instead of the vertex colour
+        int                 m_MaskTextureSize  = 0;         // texels a side; 0: by the size (512 under 1 m, 1024 under 4 m, 2048)
         XPROPERTY_DEF
         ( "hard_surface", hard_surface
         , obj_member<"WeightedNormals", &hard_surface::m_bWeightedNormals, member_help<"Replace the file's normals by face-area weighted normals: at each corner the normals of the faces around it (within SharpAngle) are averaged by their area, so big flat faces stay flat and the narrow chamfers between them take the curve (a machined look on low poly). Off: the file's normals. Leave it off when the model's normal map was baked against its own normals">>
@@ -62,6 +64,8 @@ namespace xgeom_static
         , obj_member<"BakeMasks", &hard_surface::m_bBakeMasks, member_help<"Bake the wear masks into the vertex colour, for the material's wear nodes (Input: Vertex Variants, Color): R ambient occlusion over MaskAORadius (1 open, 0 enclosed), G cavity (the same over MaskCavityRadius: crevices, where dirt and rust gather), B the height within the geometry's bounds (0 bottom, 1 top: floor splash). Replaces the file's vertex colours. Off: no colour stream">>
         , obj_member<"MaskAORadius", &hard_surface::m_MaskAORadius, member_ui<float>::drag_bar<0.01f, 0.01f, 10.0f>, member_help<"Meters: how far the AO mask looks for occluders">>
         , obj_member<"MaskCavityRadius", &hard_surface::m_MaskCavityRadius, member_ui<float>::drag_bar<0.005f, 0.002f, 1.0f>, member_help<"Meters: how far the cavity mask looks (small: only tight crevices and corners)">>
+        , obj_member<"MaskTexture", &hard_surface::m_bMaskTexture, member_help<"With BakeMasks: bake the masks into a texture over the model's UV0 (a virtual Texture this geometry owns, '<name> (Wear Masks)': R AO, G cavity, B height) instead of the vertex colour - far finer on low poly. The UVs must not overlap (otherwise the per-vertex bake, with a warning). The bake is cached: only a change of the geometry or of these settings bakes again. Read it in a material with a Sampler 2D + Texture node">>
+        , obj_member<"MaskTextureSize", &hard_surface::m_MaskTextureSize, member_help<"Texels a side of the mask texture; 0: by the model's size (512 under 1 m, 1024 under 4 m, 2048 above)">>
         )
     };
     XPROPERTY_REG(hard_surface)
