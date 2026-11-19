@@ -120,7 +120,11 @@ namespace xgeom_static_compiler
             Settings.m_pUnits = &m_Units;
 
             if ( auto Err = Importer.Import(Path, Settings); Err )
+            {
+                std::error_code Ec;     // which file, and whether it is there at all (C90: a model whose file was never committed failed with no word of it)
+                LogMessage(xresource_pipeline::msg_type::ERROR, std::format("Could not import {}{}", xstrtool::To(std::wstring(Path)), std::filesystem::exists(Path, Ec) ? "" : ": the file is not there"));
                 return xerr::create_f<state, "Failed to import the asset">(Err);
+            }
 
             return {};
         }
