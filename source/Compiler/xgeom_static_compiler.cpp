@@ -2021,6 +2021,180 @@ void ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
+        //--------------------------------------------------------------------------------------
+        // Hard-surface normals (descriptor HardSurface): a corner's normal is the area-weighted
+        // sum of the normals of the faces at its position (same mesh) within SharpAngle of its own face - big flat faces stay flat, the narrow
+        // chamfers between them take the curve. A vertex whose corners now disagree is split. Before the Mikk tangents: they follow.
+        void WeightedNormals()
+        {
+            const float CosSharp = std::cos(xmath::DegToRad(std::clamp(m_Descriptor.m_HardSurface.m_SharpAngle, 0.0f, 180.0f)));
+            auto& G = m_RawGeom;
+            const std::size_t nF = G.m_Facet.size();
+            std::vector<xmath::fvec3> FN(nF);           // area-scaled face normal (Newell: polygons too)
+            std::vector<xmath::fvec3> FU(nF);           // unit face normal
+            for (std::size_t f = 0; f < nF; ++f)
+            {
+                const auto& F = G.m_Facet[f];
+                xmath::fvec3 N = xmath::fvec3::fromZero();
+                for (int i = 0; i < F.m_nVertices; ++i)
+                    N = N + xmath::fvec3::Cross(G.m_Vertex[F.m_iVertex[i]].m_Position, G.m_Vertex[F.m_iVertex[(i + 1) % F.m_nVertices]].m_Position);
+                FN[f] = N * 0.5f;
+                const float L = N.Length();
+                FU[f] = L > 1e-20f ? N * (1.0f / L) : xmath::fvec3::fromZero();
+            }
+
+            // corners grouped by mesh and position (0.1 mm snap): runs of a sort
+            struct corner { std::int32_t m_iMesh; std::int64_t m_Q[3]; std::uint32_t m_iFacet; std::uint8_t m_iCorner; };
+            std::vector<corner> C;
+            C.reserve(nF * 3);
+            for (std::size_t f = 0; f < nF; ++f)
+            {
+                const auto& F = G.m_Facet[f];
+                for (int i = 0; i < F.m_nVertices; ++i)
+                {
+                    const auto& P = G.m_Vertex[F.m_iVertex[i]].m_Position;
+                    C.push_back({ F.m_iMesh, { std::llround(P.m_X * 1e4), std::llround(P.m_Y * 1e4), std::llround(P.m_Z * 1e4) }, std::uint32_t(f), std::uint8_t(i) });
+                }
+            }
+            const auto Key = [](const corner& A) { return std::tuple(A.m_iMesh, A.m_Q[0], A.m_Q[1], A.m_Q[2]); };
+            std::sort(C.begin(), C.end(), [&](const corner& A, const corner& B) { return Key(A) < Key(B); });
+
+            const std::size_t nV0 = G.m_Vertex.size();
+            std::vector<std::vector<std::pair<xmath::fvec3, std::int32_t>>> Made(nV0);     // per original vertex: the normals given and the vertex that has each
+            std::size_t nSplit = 0;
+            for (std::size_t b = 0, e = 0; b < C.size(); b = e)
+            {
+                for (e = b + 1; e < C.size() && Key(C[e]) == Key(C[b]); ++e) {}
+                for (std::size_t k = b; k < e; ++k)
+                {
+                    const auto& Own = FU[C[k].m_iFacet];
+                    xmath::fvec3 N = xmath::fvec3::fromZero();
+                    for (std::size_t j = b; j < e; ++j)
+                        if (FU[C[j].m_iFacet].Dot(Own) >= CosSharp) N = N + FN[C[j].m_iFacet];
+                    const float L = N.Length();
+                    if (L <= 1e-20f) continue;                                          // a degenerate face: its normal as it was
+                    N = N * (1.0f / L);
+
+                    auto&       iV  = G.m_Facet[C[k].m_iFacet].m_iVertex[C[k].m_iCorner];
+                    const auto  iV0 = iV;                                               // (an original vertex: corners are visited once)
+                    auto&       V   = Made[iV0];
+                    const auto  It  = std::find_if(V.begin(), V.end(), [&](const auto& M) { return M.first.Dot(N) > 0.99999f; });
+                    if (It != V.end()) { iV = It->second; continue; }
+                    if (V.empty()) { V.emplace_back(N, iV0); G.m_Vertex[iV0].m_BTN[0].m_Normal = N; G.m_Vertex[iV0].m_nNormals = std::max(G.m_Vertex[iV0].m_nNormals, 1); continue; }
+                    auto NewV = G.m_Vertex[iV0];                                        // corners disagree: a vertex of its own
+                    NewV.m_BTN[0].m_Normal = N;
+                    G.m_Vertex.push_back(NewV);
+                    iV = std::int32_t(G.m_Vertex.size() - 1);
+                    V.emplace_back(N, iV);
+                    ++nSplit;
+                }
+            }
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: weighted normals on {} faces (SharpAngle {:g} deg), {} vertices split at hard edges", nF, m_Descriptor.m_HardSurface.m_SharpAngle, nSplit));
+        }
+
+        //--------------------------------------------------------------------------------------
+        // The STATS line (the smoke art gate reads it) and the descriptor's Checks: triangles (as authored, LOD 0), meshes, the bounding box in
+        // mm against ExpectedSize, the UV0 fill (summed UV area: overlaps count twice). After the pre-transform, before the GI split.
+        // ponytail: no n-gon count - assimp triangulates on import; count in xraw3d's importer if the gate needs it
+        void LogStats()
+        {
+            const auto& G = m_RawGeom;
+            std::uint64_t nTris = 0;
+            double UVArea = 0;
+            float Mn[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, Mx[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+            for (const auto& F : G.m_Facet)
+            {
+                nTris += std::max(F.m_nVertices - 2, 0);
+                for (int i = 0; i < F.m_nVertices; ++i)
+                {
+                    const auto& P = G.m_Vertex[F.m_iVertex[i]].m_Position;
+                    const float p[3] = { P.m_X, P.m_Y, P.m_Z };
+                    for (int a = 0; a < 3; ++a) { Mn[a] = std::min(Mn[a], p[a]); Mx[a] = std::max(Mx[a], p[a]); }
+                }
+                for (int i = 1; i + 1 < F.m_nVertices; ++i)
+                {
+                    const auto& A = G.m_Vertex[F.m_iVertex[0]].m_UV[0]; const auto& B = G.m_Vertex[F.m_iVertex[i]].m_UV[0]; const auto& D = G.m_Vertex[F.m_iVertex[i + 1]].m_UV[0];
+                    UVArea += 0.5 * std::abs(double(B.m_X - A.m_X) * (D.m_Y - A.m_Y) - double(D.m_X - A.m_X) * (B.m_Y - A.m_Y));
+                }
+            }
+            double SizeMM[3] = {};
+            if (not G.m_Facet.empty()) for (int a = 0; a < 3; ++a) SizeMM[a] = double(Mx[a] - Mn[a]) * 1000.0;
+            const auto&  Ck  = m_Descriptor.m_Checks;
+            const double Exp[3] = { Ck.m_ExpectedSize.m_X * 1000.0, Ck.m_ExpectedSize.m_Y * 1000.0, Ck.m_ExpectedSize.m_Z * 1000.0 };
+            double ErrMM = -1;                                                          // -1: not checked
+            for (int a = 0; a < 3; ++a) if (Exp[a] > 0) ErrMM = std::max(ErrMM, std::abs(SizeMM[a] - Exp[a]));
+
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("STATS {{\"tris\":{},\"meshes\":{},\"bbox_mm\":[{:.1f},{:.1f},{:.1f}],\"bbox_err_mm\":{:.2f},\"uv_fill\":{:.3f},\"max_tris\":{}}}"
+                , nTris, G.m_Mesh.size(), SizeMM[0], SizeMM[1], SizeMM[2], ErrMM, UVArea, Ck.m_MaxTriangles));
+            if (ErrMM > Ck.m_SizeToleranceMM)
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("Checks: the bounding box is {:.1f} x {:.1f} x {:.1f} mm, ExpectedSize {:.1f} x {:.1f} x {:.1f} mm: off by {:.1f} mm (tolerance {:g})"
+                    , SizeMM[0], SizeMM[1], SizeMM[2], Exp[0], Exp[1], Exp[2], ErrMM, Ck.m_SizeToleranceMM));
+            if (Ck.m_MaxTriangles && nTris > Ck.m_MaxTriangles)
+                LogMessage(xresource_pipeline::msg_type::WARNING, std::format("Checks: {} triangles, over the budget of {} (MaxTriangles)", nTris, Ck.m_MaxTriangles));
+        }
+
+        //--------------------------------------------------------------------------------------
+        // Wear masks into the vertex colour (descriptor HardSurface/BakeMasks): R ambient occlusion over MaskAORadius, G cavity
+        // (the same over MaskCavityRadius), B height within the bounds; sRGB-encoded (the vertex shader decodes RGB, mb_DecodeVertexColor), A 1.
+        // The rays: the GI's own BVH (xlionrender::gi::surfel_mesh: Occluded), 32 cosine rays a vertex (Hammersley, rotated per vertex).
+        // ponytail: per vertex and serial - a texture bake in UV1 (and xscheduler) when a model's vertices are too sparse for its wear
+        void BakeMasks()
+        {
+            using v3 = xlionrender::gi::v3;
+            auto& G = m_RawGeom;
+            const auto& HS = m_Descriptor.m_HardSurface;
+            xlionrender::gi::surfel_mesh M;
+            M.m_Pos.reserve(G.m_Vertex.size()); M.m_Nrm.reserve(G.m_Vertex.size());
+            float MinY = FLT_MAX, MaxY = -FLT_MAX;
+            for (const auto& V : G.m_Vertex)
+            {
+                M.m_Pos.push_back(v3{ V.m_Position.m_X, V.m_Position.m_Y, V.m_Position.m_Z });
+                M.m_Nrm.push_back(v3{ V.m_BTN[0].m_Normal.m_X, V.m_BTN[0].m_Normal.m_Y, V.m_BTN[0].m_Normal.m_Z });
+            }
+            for (const auto& F : G.m_Facet)
+                for (int i = 0; i < F.m_nVertices; ++i) { const float y = G.m_Vertex[F.m_iVertex[i]].m_Position.m_Y; MinY = std::min(MinY, y); MaxY = std::max(MaxY, y); }
+            for (const auto& F : G.m_Facet)
+                for (int i = 1; i + 1 < F.m_nVertices; ++i) M.m_Tris.push_back({ F.m_iVertex[0], F.m_iVertex[i], F.m_iVertex[i + 1] });
+            if (M.m_Tris.empty()) return;
+            M.BuildRays();
+
+            const float AOR  = std::max(HS.m_MaskAORadius, 1e-4f);
+            const float CavR = std::clamp(HS.m_MaskCavityRadius, 1e-4f, AOR);
+            const float HInv = MaxY > MinY ? 1.0f / (MaxY - MinY) : 0.0f;
+            const auto  Srgb = [](float c) { c = std::clamp(c, 0.0f, 1.0f); return std::uint8_t(std::lround(255.0f * (c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f))); };
+            constexpr int rays_v = 32;
+            double SumAO = 0, SumCav = 0;
+            for (std::size_t v = 0; v < G.m_Vertex.size(); ++v)
+            {
+                auto& V = G.m_Vertex[v];
+                v3 N = M.m_Nrm[v];
+                const float L = N.Length();
+                if (L < 1e-6f) N = v3{ 0, 1, 0 }; else N = N * (1.0f / L);
+                const v3 A  = std::abs(N.m_Y) < 0.9f ? v3{ 0, 1, 0 } : v3{ 1, 0, 0 };
+                const v3 T  = v3::Cross(A, N).NormalizeCopy();
+                const v3 B  = v3::Cross(N, T);
+                const v3 O  = M.m_Pos[v] + N * 1e-3f;
+                const float Rot = float((v * 2654435761u) & 0xFFFFu) / 65536.0f;
+                int OpenAO = 0, OpenCav = 0;
+                for (int k = 0; k < rays_v; ++k)
+                {
+                    std::uint32_t b = std::uint32_t(k); b = (b << 16) | (b >> 16); b = ((b & 0x55555555u) << 1) | ((b & 0xAAAAAAAAu) >> 1); b = ((b & 0x33333333u) << 2) | ((b & 0xCCCCCCCCu) >> 2);
+                    b = ((b & 0x0F0F0F0Fu) << 4) | ((b & 0xF0F0F0F0u) >> 4); b = ((b & 0x00FF00FFu) << 8) | ((b & 0xFF00FF00u) >> 8);
+                    const float u1 = (k + 0.5f) / rays_v, u2 = float(b) * 2.3283064e-10f + Rot;
+                    const float r = std::sqrt(u1), phi = 6.2831853f * u2;
+                    const v3 D = (T * (r * std::cos(phi)) + B * (r * std::sin(phi)) + N * std::sqrt(std::max(0.0f, 1.0f - u1))).NormalizeCopy();
+                    if (!M.Occluded(O, D, AOR)) { ++OpenAO; ++OpenCav; }
+                    else if (!M.Occluded(O, D, CavR)) ++OpenCav;
+                }
+                const float AO = float(OpenAO) / rays_v, Cav = float(OpenCav) / rays_v, H = (V.m_Position.m_Y - MinY) * HInv;
+                SumAO += AO; SumCav += Cav;
+                V.m_Color[0].m_R = Srgb(AO); V.m_Color[0].m_G = Srgb(Cav); V.m_Color[0].m_B = Srgb(H); V.m_Color[0].m_A = 255;
+                V.m_nColors = 1;
+            }
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: wear masks baked into {} vertices (R AO {:g} m, G cavity {:g} m, B height): mean AO {:.3f}, mean cavity {:.3f}"
+                , G.m_Vertex.size(), AOR, CavR, SumAO / std::max<std::size_t>(G.m_Vertex.size(), 1), SumCav / std::max<std::size_t>(G.m_Vertex.size(), 1)));
+        }
+
         xerr Compile()
         {
             try
@@ -2074,6 +2248,12 @@ void ConvertToCompilerMesh(void)
                 }
 
                 //
+                // Hard-surface normals and the STATS line / Checks
+                //
+                if (m_Descriptor.m_HardSurface.m_bWeightedNormals) WeightedNormals();
+                LogStats();
+
+                //
                 // Normalize Mesh
                 //
                 {
@@ -2110,6 +2290,11 @@ void ConvertToCompilerMesh(void)
                 if (m_bGITooBig && Unsplit) m_RawGeom = std::move(*Unsplit);      // no GI: its triangles as they were
                 Unsplit.reset();
                 displayProgressBar("Checking the GI surfels", 1);
+
+                //
+                // The wear masks into the vertex colour: after the GI split (its new vertices get masks too)
+                //
+                if (m_Descriptor.m_HardSurface.m_bBakeMasks) BakeMasks();
 
                 //
                 // Clean the mesh

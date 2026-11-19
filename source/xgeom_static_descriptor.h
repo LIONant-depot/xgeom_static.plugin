@@ -12,7 +12,7 @@ namespace xgeom_static
     // While this should be just a type... it also happens to be an instance... the instance of the static_geom_plugin
     // So while generating the type guid we must treat it as an instance.
     inline static constexpr auto    resource_type_guid_v = xresource::type_guid(xresource::guid_generator::Instance64FromString("GeomStatic"));
-    static constexpr wchar_t        mesh_filter_v[] = L"Mesh\0 *.fbx; *.obj; *.blend\0Any Thing\0 *.*\0";
+    static constexpr wchar_t        mesh_filter_v[] = L"Mesh\0 *.fbx; *.obj; *.blend; *.gltf; *.glb\0Any Thing\0 *.*\0";
 
     static constexpr auto gi_mode_v = std::array
     { xproperty::settings::enum_item("OFF",                 gi_mode::OFF,                "No GI: no surfels are baked, the mesh is lit by the probes and the sky only.")
@@ -45,6 +45,41 @@ namespace xgeom_static
         )
     };
     XPROPERTY_REG(gi_settings)
+
+    // Hard-surface shading: face-area weighted normals, so a low-poly
+    // machined part shades flat on its big faces and the chamfers take the curvature - without the author knowing about weighted normals
+    struct hard_surface
+    {
+        bool                m_bWeightedNormals = false;     // off: the file's normals as they are
+        float               m_SharpAngle       = 50.0f;     // degrees: faces further apart than this keep a hard edge
+        bool                m_bBakeMasks       = false;     // the wear masks into the vertex colour (R AO, G cavity, B height; A 1)
+        float               m_MaskAORadius     = 0.3f;      // meters (after the PreTranslation)
+        float               m_MaskCavityRadius = 0.04f;     // meters
+        XPROPERTY_DEF
+        ( "hard_surface", hard_surface
+        , obj_member<"WeightedNormals", &hard_surface::m_bWeightedNormals, member_help<"Replace the file's normals by face-area weighted normals: at each corner the normals of the faces around it (within SharpAngle) are averaged by their area, so big flat faces stay flat and the narrow chamfers between them take the curve (a machined look on low poly). Off: the file's normals. Leave it off when the model's normal map was baked against its own normals">>
+        , obj_member<"SharpAngle", &hard_surface::m_SharpAngle, member_ui<float>::drag_bar<0.5f, 1.0f, 180.0f>, member_help<"Degrees: two faces meeting at more than this angle keep a hard edge (with WeightedNormals on)">>
+        , obj_member<"BakeMasks", &hard_surface::m_bBakeMasks, member_help<"Bake the wear masks into the vertex colour, for the material's wear nodes (Input: Vertex Variants, Color): R ambient occlusion over MaskAORadius (1 open, 0 enclosed), G cavity (the same over MaskCavityRadius: crevices, where dirt and rust gather), B the height within the geometry's bounds (0 bottom, 1 top: floor splash). Replaces the file's vertex colours. Off: no colour stream">>
+        , obj_member<"MaskAORadius", &hard_surface::m_MaskAORadius, member_ui<float>::drag_bar<0.01f, 0.01f, 10.0f>, member_help<"Meters: how far the AO mask looks for occluders">>
+        , obj_member<"MaskCavityRadius", &hard_surface::m_MaskCavityRadius, member_ui<float>::drag_bar<0.005f, 0.002f, 1.0f>, member_help<"Meters: how far the cavity mask looks (small: only tight crevices and corners)">>
+        )
+    };
+    XPROPERTY_REG(hard_surface)
+
+    // What the compile checks and reports (the STATS line of the compile log, read by the smoke art gate)
+    struct checks
+    {
+        xmath::fvec3        m_ExpectedSize     = xmath::fvec3::fromZero();     // meters, after the PreTranslation; 0 = not checked
+        float               m_SizeToleranceMM  = 5.0f;
+        std::uint32_t       m_MaxTriangles     = 0;         // LOD 0, the whole geometry; 0 = no budget
+        XPROPERTY_DEF
+        ( "checks", checks
+        , obj_member<"ExpectedSize", &checks::m_ExpectedSize, member_help<"The size the model must have (meters, the bounding box after the PreTranslation). A box off by more than SizeToleranceMM on any axis is a compile warning (props define collision). 0: not checked">>
+        , obj_member<"SizeToleranceMM", &checks::m_SizeToleranceMM, member_help<"Millimeters the bounding box may differ from ExpectedSize">>
+        , obj_member<"MaxTriangles", &checks::m_MaxTriangles, member_help<"The triangle budget (LOD 0, the whole geometry): over it is a compile warning. 0: no budget">>
+        )
+    };
+    XPROPERTY_REG(checks)
 
     struct lod
     {
@@ -598,6 +633,8 @@ namespace xgeom_static
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
         gi_settings                                 m_GI                    = {};
+        hard_surface                                m_HardSurface           = {};
+        checks                                      m_Checks                = {};
         xmaterial_instance::import::settings        m_ImportMaterials       = {};
 
         XPROPERTY_VDEF
@@ -629,6 +666,8 @@ namespace xgeom_static
             }>
             , member_help<"Meshes that are not in any group; these will be imported individually with their original hierarchy preserved"
             >>
+            , obj_member<"HardSurface",         &descriptor::m_HardSurface, member_ui_open<true>, member_help<"Shading for hard-surface models (machines, props): weighted normals">>
+            , obj_member<"Checks",              &descriptor::m_Checks, member_help<"Size and triangle budget the compile checks (warnings in the compile log; every compile logs a STATS line)">>
             , obj_member<"GI",                  &descriptor::m_GI, member_ui_open<true>, member_help<"The surfel GI of this geometry: baked here, read by xLIONRender's renderer">>
             , obj_member<"Deleted List",       &descriptor::m_DeleteEntryList,                                     member_help<"List of nodes and meshes marked for deletion; these will not be included in the compiled geometry">>
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>, member_help<"List of materials used by this geometry with usage counts (hidden by default)">>
