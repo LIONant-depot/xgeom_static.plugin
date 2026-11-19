@@ -121,12 +121,14 @@ namespace xgeom_static
         std::string                 m_Name = {};
         std::vector<lod>            m_LODs = {};
         bool                        m_bGenerateLODs = true;     // (LODs empty: an automatic chain, each half the previous one)
+        float                       m_DropPartSize  = 0.0f;     // meters: LOD 1 drops whole parts under it, each LOD after twice that; 0 off
 
         XPROPERTY_DEF
         ( "mesh_details", mesh_details
         , obj_member<"Name", &mesh_details::m_Name, member_help<"Name of the mesh">>
         , obj_member<"LODs", &mesh_details::m_LODs, member_help<"Level of Detail settings for this mesh: lower LODs are simpler for distant rendering. Empty: made automatically (see GenerateLODs)">>
         , obj_member<"GenerateLODs", &mesh_details::m_bGenerateLODs, member_help<"With no LODs listed, the compiler makes them: up to 4, each half the previous one's triangles. Off: no LODs">>
+        , obj_member<"DropPartSize", &mesh_details::m_DropPartSize, member_help<"Meters. Each LOD first drops whole parts (pieces not connected to the rest: bolts, rivets, small fittings) whose size is under DropPartSize at LOD 1, twice that at LOD 2 and so on, then simplifies what is left: small parts vanish cleanly instead of melting into the surface. 0: off (simplify only)">>
         )
     };
     XPROPERTY_REG(mesh_details)

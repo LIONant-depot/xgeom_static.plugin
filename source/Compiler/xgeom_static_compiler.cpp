@@ -414,10 +414,31 @@ void ConvertToCompilerMesh(void)
         // sets and the colour weigh in, their error clamped to the position's scale (meshopt_SimplifyErrorClamped: the error is the LOD
         // pick's), the UV/normal seams kept (meshopt_SimplifyPermissive let them collapse: textures stretched over whole facades at LOD 1 in
         // Bistro); its border locked (no cracks against its neighbours at another LOD)
-        static void SimplifyChain(sub_mesh& S, const auto& LODs)
+        static void SimplifyChain(sub_mesh& S, const auto& LODs, float DropPartSize = 0.0f)
         {
             const std::size_t nV = S.m_Vertex.size();
             if (nV == 0) return;
+            // Parts (DropPartSize > 0): the vertices joined by the triangles and by shared positions (seams); a part's size: its box's
+            // diagonal. The simplifier only collapses along edges, so a vertex keeps its part in every LOD
+            std::vector<std::uint32_t> Part;
+            std::vector<float>         PartSize;
+            if (DropPartSize > 0.0f)
+            {
+                Part.resize(nV);
+                for (std::uint32_t v = 0; v < nV; ++v) Part[v] = v;
+                const auto Find = [&](std::uint32_t v) { while (Part[v] != v) { Part[v] = Part[Part[v]]; v = Part[v]; } return v; };
+                const auto Join = [&](std::uint32_t a, std::uint32_t b) { a = Find(a); b = Find(b); if (a != b) Part[std::max(a, b)] = std::min(a, b); };
+                for (std::size_t i = 0; i + 2 < S.m_Indices.size(); i += 3) { Join(S.m_Indices[i], S.m_Indices[i + 1]); Join(S.m_Indices[i], S.m_Indices[i + 2]); }
+                std::vector<std::pair<std::array<std::int64_t, 3>, std::uint32_t>> ByPos(nV);
+                for (std::uint32_t v = 0; v < nV; ++v) { const auto& P = S.m_Vertex[v].m_Position; ByPos[v] = { { std::llround(P.m_X * 1e4), std::llround(P.m_Y * 1e4), std::llround(P.m_Z * 1e4) }, v }; }
+                std::sort(ByPos.begin(), ByPos.end());
+                for (std::size_t k = 1; k < nV; ++k) if (ByPos[k].first == ByPos[k - 1].first) Join(ByPos[k].second, ByPos[k - 1].second);
+                std::vector<xmath::fvec3> Lo(nV, xmath::fvec3(FLT_MAX, FLT_MAX, FLT_MAX)), Hi(nV, xmath::fvec3(-FLT_MAX, -FLT_MAX, -FLT_MAX));
+                for (std::uint32_t v = 0; v < nV; ++v) { const auto r = Find(v); Part[v] = r; const auto& P = S.m_Vertex[v].m_Position; Lo[r] = xmath::fvec3(std::min(Lo[r].m_X, P.m_X), std::min(Lo[r].m_Y, P.m_Y), std::min(Lo[r].m_Z, P.m_Z)); Hi[r] = xmath::fvec3(std::max(Hi[r].m_X, P.m_X), std::max(Hi[r].m_Y, P.m_Y), std::max(Hi[r].m_Z, P.m_Z)); }
+                PartSize.assign(nV, 0.0f);
+                for (std::uint32_t v = 0; v < nV; ++v) if (Part[v] == v) PartSize[v] = (Hi[v] - Lo[v]).Length();
+            }
+            float DropNow = DropPartSize;
             const int nA = 3 + 2 + (S.m_bHasUV1 ? 2 : 0) + (S.m_bHasColor ? 4 : 0);
             std::vector<float> Attr(nV * std::size_t(nA)), Weights{ 0.5f, 0.5f, 0.5f, 1.0f, 1.0f };
             if (S.m_bHasUV1)   Weights.insert(Weights.end(), { 0.5f, 0.5f });
@@ -437,19 +458,34 @@ void ConvertToCompilerMesh(void)
             for (const auto& L : LODs)
             {
                 const std::size_t target_index_count = std::size_t(IndexCount * L.m_LODReduction + 0.005f) / 3 * 3;
-                const auto& Source = S.m_LODs.size() ? S.m_LODs.back().m_Indices : S.m_Indices;
-                if (Source.size() < target_index_count) break;
+                const auto& Prev = S.m_LODs.size() ? S.m_LODs.back().m_Indices : S.m_Indices;
+                if (Prev.size() < target_index_count) break;
+                // the parts under this LOD's size go first (whole), then the simplifier takes what is left to the count
+                std::vector<std::uint32_t> Kept;
+                float Dropped = 0;
+                if (!Part.empty())
+                {
+                    for (std::size_t i = 0; i + 2 < Prev.size(); i += 3)
+                    {
+                        const float Sz = PartSize[Part[Prev[i]]];
+                        if (Sz < DropNow) { Dropped = std::max(Dropped, Sz); continue; }
+                        Kept.insert(Kept.end(), { Prev[i], Prev[i + 1], Prev[i + 2] });
+                    }
+                    DropNow *= 2.0f;
+                }
+                const auto& Source = Dropped > 0 ? Kept : Prev;
                 auto& NewLod = S.m_LODs.emplace_back();
                 NewLod.m_Indices.resize(Source.size());
                 float LodError = 0;
-                const std::size_t new_size = meshopt_simplifyWithAttributes(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], nV, sizeof(vertex)
+                const std::size_t new_size = Source.size() <= target_index_count ? (std::ranges::copy(Source, NewLod.m_Indices.begin()), Source.size())
+                                           : meshopt_simplifyWithAttributes(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], nV, sizeof(vertex)
                                                                           , Attr.data(), sizeof(float) * std::size_t(nA), Weights.data(), std::size_t(nA), nullptr, target_index_count, FLT_MAX     // (the count decides; the error is recorded)
                                                                           , meshopt_SimplifyLockBorder | meshopt_SimplifyErrorAbsolute | meshopt_SimplifyErrorClamped, &LodError);
                 NewLod.m_Indices.resize(new_size);
                 // a LOD that does not cut at least a quarter of the previous one's indices is not worth its memory and draws (the simplifier
                 // reached its error bound first): dropped, and no coarser one for this submesh
-                if (new_size > Source.size() * 3 / 4 || new_size == 0) { S.m_LODs.pop_back(); break; }
-                Error += LodError;                              // (chained: the errors add up, object space)
+                if (new_size > Prev.size() * 3 / 4 || new_size == 0) { S.m_LODs.pop_back(); break; }
+                Error += std::max(LodError, Dropped);           // (chained: the errors add up, object space; a dropped part: its size)
                 NewLod.m_Error = Error;
                 IndexCount = new_size;
             }
@@ -482,7 +518,15 @@ void ConvertToCompilerMesh(void)
 
                 for (auto& G : SplitIntoGroups(std::move(M)))
                 {
-                    for (auto& S : G.m_SubMesh) SimplifyChain(S, details->m_LODs);
+                    for (auto& S : G.m_SubMesh) SimplifyChain(S, details->m_LODs, details->m_DropPartSize);
+                    {   // the chain's triangles a LOD (the art gate and the part-drop check read it)
+                        std::string Line = std::format("LOD triangles of {}:", G.m_Name);
+                        std::size_t n0 = 0, nMax = 0; for (const auto& S : G.m_SubMesh) { n0 += S.m_Indices.size() / 3; nMax = std::max(nMax, S.m_LODs.size()); }
+                        Line += std::format(" {}", n0);
+                        for (std::size_t k = 0; k < nMax; ++k) { std::size_t n = 0; for (const auto& S : G.m_SubMesh) n += (S.m_LODs.empty() ? S.m_Indices.size() : S.m_LODs[std::min(k, S.m_LODs.size() - 1)].m_Indices.size()) / 3; Line += std::format(" {}", n); }
+                        if (details->m_DropPartSize > 0) Line += std::format(" (parts under {:g} m dropped at LOD 1, doubling)", details->m_DropPartSize);
+                        LogMessage(xresource_pipeline::msg_type::INFO, Line);
+                    }
                     m_NameToDetail[G.m_Name] = details;         // (a group: its mesh's details)
                     Out.push_back(std::move(G));
                 }
