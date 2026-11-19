@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <optional>
+#include <map>
 #include <fstream>
 #include <iostream>
 
@@ -2202,6 +2203,7 @@ void ConvertToCompilerMesh(void)
                 for (int i = 1; i + 1 < F.m_nVertices; ++i) M.m_Tris.push_back({ F.m_iVertex[0], F.m_iVertex[i], F.m_iVertex[i + 1] });
             if (M.m_Tris.empty()) return;
             M.BuildRays();
+            const auto Parts = GrimeParts();
 
             const float AOR  = std::max(HS.m_MaskAORadius, 1e-4f);
             const float CavR = std::clamp(HS.m_MaskCavityRadius, 1e-4f, AOR);
@@ -2233,9 +2235,10 @@ void ConvertToCompilerMesh(void)
                 }
                 const float AO = float(OpenAO) / rays_v, Cav = float(OpenCav) / rays_v, H = (V.m_Position.m_Y - MinY) * HInv;
                 SumAO += AO; SumCav += Cav;
-                V.m_Color[0].m_R = Srgb(AO); V.m_Color[0].m_G = Srgb(Cav); V.m_Color[0].m_B = Srgb(H); V.m_Color[0].m_A = 255;
+                V.m_Color[0].m_R = Srgb(AO); V.m_Color[0].m_G = Srgb(Cav); V.m_Color[0].m_B = Srgb(H); V.m_Color[0].m_A = std::uint8_t(std::lround(255.0f * (1.0f - GrimeAt(Parts, V.m_Position, M.m_Nrm[v]))));
                 V.m_nColors = 1;
             }
+            if (!Parts.empty()) LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: semantic grime from {} tagged parts ({}), runs of {:g} m (A)", Parts.size(), m_TaggedSummary, m_Descriptor.m_HardSurface.m_GrimeRunLength));
             LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: wear masks baked into {} vertices (R AO {:g} m, G cavity {:g} m, B height): mean AO {:.3f}, mean cavity {:.3f}"
                 , G.m_Vertex.size(), AOR, CavR, SumAO / std::max<std::size_t>(G.m_Vertex.size(), 1), SumCav / std::max<std::size_t>(G.m_Vertex.size(), 1)));
         }
@@ -2302,7 +2305,8 @@ void ConvertToCompilerMesh(void)
             std::uint64_t Key = 1469598103934665603ull;
             const auto Hash = [&](const void* p, std::size_t n) { for (std::size_t i = 0; i < n; ++i) { Key ^= ((const std::uint8_t*)p)[i]; Key *= 1099511628211ull; } };
             for (const auto& T : Tris) for (int k : T) { const auto& V = G.m_Vertex[k]; Hash(&V.m_Position, sizeof(V.m_Position)); Hash(&V.m_BTN[0].m_Normal, sizeof(V.m_BTN[0].m_Normal)); Hash(&V.m_UV[0], sizeof(V.m_UV[0])); }
-            const float Settings[] = { float(N), AOR, CavR, 1.0f /*bake version*/ };
+            const auto  Parts = GrimeParts();
+            const float Settings[] = { float(N), AOR, CavR, 3.0f /*bake version*/, m_Descriptor.m_HardSurface.m_GrimeRunLength, float(Parts.size()) };
             Hash(Settings, sizeof(Settings));
             const std::wstring Rel = std::format(L"Cache\\Resources\\Baked\\WearMasks\\{:016X}.exr", m_ResourceGuid.m_Value);
             const std::wstring Exr = std::format(L"{}\\{}", m_ProjectPaths.m_Project, Rel), KeyFile = Exr + L".key";
@@ -2381,7 +2385,7 @@ void ConvertToCompilerMesh(void)
                         if (!M.Occluded(O, D, AOR)) { ++OpenAO; ++OpenCav; }
                         else if (!M.Occluded(O, D, CavR)) ++OpenCav;
                     }
-                    RGBA[i * 4 + 0] = float(OpenAO) / rays_v; RGBA[i * 4 + 1] = float(OpenCav) / rays_v; RGBA[i * 4 + 2] = (P.m_Y - Lo[1]) * HInv; RGBA[i * 4 + 3] = 1.0f;
+                    RGBA[i * 4 + 0] = float(OpenAO) / rays_v; RGBA[i * 4 + 1] = float(OpenCav) / rays_v; RGBA[i * 4 + 2] = (P.m_Y - Lo[1]) * HInv; RGBA[i * 4 + 3] = 1.0f - GrimeAt(Parts, P, Nn);
                     Done[i] = 1;
                 }
             });
@@ -2405,9 +2409,11 @@ void ConvertToCompilerMesh(void)
                 }
                 Done = std::move(Next);
             }
+            for (std::size_t i = 0; i < Done.size(); ++i) if (!Done[i]) { RGBA[i * 4 + 0] = RGBA[i * 4 + 1] = RGBA[i * 4 + 3] = 1.0f; RGBA[i * 4 + 2] = 0.0f; }   // the rest neutral (open, clean): the low mips do not darken the islands
             if (!WriteEXR(Exr, N, N, RGBA)) { LogMessage(xresource_pipeline::msg_type::ERROR, std::format("HardSurface: could not write {}", xstrtool::To(Exr))); return false; }
             { std::ofstream K{ std::filesystem::path(KeyFile) }; K << KeyText << "\n"; }
             double SumAO = 0; for (std::size_t i = 0; i < Owner.size(); ++i) if (Owner[i] >= 0) SumAO += RGBA[i * 4];
+            if (!Parts.empty()) LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: semantic grime from {} tagged parts ({}), runs of {:g} m (A)", Parts.size(), m_TaggedSummary, m_Descriptor.m_HardSurface.m_GrimeRunLength));
             LogMessage(xresource_pipeline::msg_type::INFO, std::format("HardSurface: wear mask texture {}x{} baked ({} texels covered, {:.0f}% of the square; mean AO {:.3f}) in {:.1f} s -> {}"
                 , N, N, nCovered, 100.0 * nCovered / (double(N) * N), SumAO / std::max<std::size_t>(nCovered, 1), std::chrono::duration<double>(std::chrono::steady_clock::now() - T0).count(), xstrtool::To(Rel)));
             m_MaskTexturePath = Rel;
@@ -2451,6 +2457,70 @@ void ConvertToCompilerMesh(void)
 
         std::wstring m_MaskTexturePath;                         // BakeMaskTexture's file (project relative); empty: none
 
+        //--------------------------------------------------------------------------------------
+        // Semantic grime (HardSurface/GrimeRunLength): the parts whose mesh is named like a fastener or a fitting (bolt, nut, rivet, screw,
+        // weld, flange, fitting, valve) shed rust and grime: a bleed ring around each and a run below it, fading over GrimeRunLength and
+        // widening as it falls. Recorded before MergeMeshes (it renumbers the meshes; the vertices stay), measured after the pre-transform.
+        struct grime_part { xmath::fvec3 m_Center; float m_Radius, m_Bottom; };
+        std::vector<std::vector<std::int32_t>>  m_TaggedParts;      // per tagged mesh: its vertices
+        std::string                             m_TaggedSummary;    // "bolt 8, weld 2"
+
+        void CollectTaggedParts()
+        {
+            m_TaggedParts.clear(); m_TaggedSummary.clear();
+            if (m_Descriptor.m_HardSurface.m_GrimeRunLength <= 0.0f) return;
+            static constexpr const char* words_v[] = { "bolt", "nut", "rivet", "screw", "weld", "flange", "fitting", "valve" };
+            std::map<std::string, int> Count;
+            std::vector<int> Slot(m_RawGeom.m_Mesh.size(), -1);
+            for (std::size_t m = 0; m < m_RawGeom.m_Mesh.size(); ++m)
+            {
+                std::string Name = m_RawGeom.m_Mesh[m].m_Name;
+                for (auto& c : Name) c = char(std::tolower(static_cast<unsigned char>(c)));
+                for (const char* W : words_v) if (Name.find(W) != std::string::npos) { Slot[m] = int(m_TaggedParts.size()); m_TaggedParts.emplace_back(); ++Count[W]; break; }
+            }
+            for (const auto& F : m_RawGeom.m_Facet)
+                if (F.m_iMesh >= 0 && F.m_iMesh < int(Slot.size()) && Slot[F.m_iMesh] >= 0)
+                    for (int i = 0; i < F.m_nVertices; ++i) m_TaggedParts[Slot[F.m_iMesh]].push_back(F.m_iVertex[i]);
+            for (auto& [W, n] : Count) m_TaggedSummary += std::format("{}{} {}", m_TaggedSummary.empty() ? "" : ", ", W, n);
+        }
+
+        std::vector<grime_part> GrimeParts() const
+        {
+            std::vector<grime_part> Out;
+            for (const auto& Part : m_TaggedParts)
+            {
+                if (Part.empty()) continue;
+                xmath::fvec3 Lo(FLT_MAX, FLT_MAX, FLT_MAX), Hi(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+                for (auto v : Part)
+                {
+                    const auto& P = m_RawGeom.m_Vertex[v].m_Position;
+                    Lo = xmath::fvec3(std::min(Lo.m_X, P.m_X), std::min(Lo.m_Y, P.m_Y), std::min(Lo.m_Z, P.m_Z));
+                    Hi = xmath::fvec3(std::max(Hi.m_X, P.m_X), std::max(Hi.m_Y, P.m_Y), std::max(Hi.m_Z, P.m_Z));
+                }
+                Out.push_back({ (Lo + Hi) * 0.5f, std::max(Hi.m_X - Lo.m_X, Hi.m_Z - Lo.m_Z) * 0.5f, Lo.m_Y });
+            }
+            return Out;
+        }
+
+        // 0 clean .. 1 full grime at P (normal N): the strongest of the parts' rings and runs
+        float GrimeAt(const std::vector<grime_part>& Parts, const xmath::fvec3& P, const xmath::fvec3& N) const noexcept
+        {
+            const float RunLen = m_Descriptor.m_HardSurface.m_GrimeRunLength;
+            if (N.m_Y < -0.5f) return 0.0f;                                 // (faces looking down: nothing runs onto them)
+            float G = 0.0f;
+            for (const auto& Pt : Parts)
+            {
+                const float dx = P.m_X - Pt.m_Center.m_X, dz = P.m_Z - Pt.m_Center.m_Z, Lat = std::sqrt(dx * dx + dz * dz);
+                const float Fall = Pt.m_Bottom - P.m_Y;                     // how far below the part's base (negative: above it)
+                if (Fall < -Pt.m_Radius || Fall > RunLen) continue;
+                const float t     = std::clamp(Fall / RunLen, 0.0f, 1.0f);
+                const float Width = Pt.m_Radius * (1.6f + 1.5f * t);       // a ring 1.6 radii wide at the base, wider as it falls
+                const float Edge  = std::clamp((Width - Lat) / (0.5f * Width), 0.0f, 1.0f);
+                G = std::max(G, Edge * (1.0f - t) * (1.0f - t));
+            }
+            return G;
+        }
+
         xerr Compile()
         {
             try
@@ -2470,6 +2540,7 @@ void ConvertToCompilerMesh(void)
                 //
                 {
                     displayProgressBar("Merging Meshes", 1);
+                    CollectTaggedParts();                   // (before the merge renumbers the meshes: semantic grime)
                     MergeMeshes();
                     displayProgressBar("Merging Meshes", 0);
                 }
