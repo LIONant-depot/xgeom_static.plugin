@@ -399,7 +399,9 @@ namespace xgeom_static_editor::preview
                 const float Y    = S.m_bGridToYMin ? BoxMin.m_Y : 0;
                 const float Size = std::max(200.0f, 10.0f * (BoxMax - BoxMin).Length());
                 if (S.m_View.getPosition().m_Y >= Y)    // front face only: from below the ground there is no grid (as xeditor_tools' grid)
-                Scene.m_Draws.push_back({ .m_Mesh = m_GroundMesh, .m_L2W = xmath::fmat4::fromTranslation({ 0, Y, 0 }) * xmath::fmat4::fromScale({ Size, 1, Size })
+                // a hair below the plane (a thousandth of the view distance: 1 mm at 1 m), so a face of the geometry ON it (a flat base, the grid
+                // moved to its lowest point) always wins instead of z-fighting with the ground; too small to see as a gap
+                Scene.m_Draws.push_back({ .m_Mesh = m_GroundMesh, .m_L2W = xmath::fmat4::fromTranslation({ 0, Y - 1e-3f * std::max(S.m_Distance, 0.0f), 0 }) * xmath::fmat4::fromScale({ Size, 1, Size })
                                         , .m_Material = { .m_Roughness = 1.0f, .m_bCastShadows = false, .m_bEditorGrid = true } });
                 S.m_GridYMin = Geom.m_BBox.m_Min.m_Y;       // the property shows where the geometry ends, whatever the grid does
             }
